@@ -1,10 +1,15 @@
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize
 from math import sqrt, log
 from sklearn import svm
 from sklearn.model_selection import cross_val_score, KFold
 from sklearn.metrics import mean_squared_error
 from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import GridSearchCV
+from sklearn.ensemble import RandomForestRegressor
+from sklearn import linear_model
 
 
 def load_dataset():
@@ -135,10 +140,14 @@ def clean_dataset(raw):
         'Exterior1st',
         'Exterior2nd'
     ]
+    use_log_scale = [
+        'TotalFloorSF'
+    ]
     cleaned = raw.fillna(constant_missing_replacements)
     for column in replace_missing_modal:
         cleaned[column].fillna(cleaned[column].mode())
     cleaned['HasGarage'] = cleaned['GarageType'].apply(lambda a: float(not pd.isnull(a)))
+    cleaned['HasAboveGrnd'] = (cleaned['1stFlrSF'] + cleaned['2ndFlrSF']).apply(lambda a: float(a > 0))
     cleaned['HasBasement'] = cleaned['BsmtQual'].apply(lambda a: float(not pd.isnull(a)))
     cleaned['Has2ndFloor'] = cleaned['2ndFlrSF'].apply(lambda a: float(a > 0))
     cleaned['TotalFloorSF'] = cleaned['1stFlrSF'] + cleaned['2ndFlrSF'] + cleaned['TotalBsmtSF']
@@ -174,6 +183,9 @@ def clean_dataset(raw):
     cleaned['GarageArea'] = cleaned['GarageArea'].apply(lambda q: q/1500)
     cleaned['HasPool'] = cleaned['PoolArea'].apply(lambda q: float(q > 0))
 
+    for column in use_log_scale:
+        cleaned[column] = cleaned[column].apply(lambda v: log(v))
+
     for column in removed_from_cleaned:
         del cleaned[column]
 
@@ -187,6 +199,261 @@ def model_accuracy(model, X, Y):
     return rms
 
 
+# Utility function to move the midpoint of a colormap to be around
+# the values of interest.
+
+class MidpointNormalize(Normalize):
+
+    def __init__(self, vmin=None, vmax=None, midpoint=None, clip=False):
+        self.midpoint = midpoint
+        Normalize.__init__(self, vmin, vmax, clip)
+
+    def __call__(self, value, clip=None):
+        x, y = [self.vmin, self.midpoint, self.vmax], [0, 0.5, 1]
+        return np.ma.masked_array(np.interp(value, x, y))
+
+
+def train_svr(X, Y, selected_features=None, cleaned=None):
+    if selected_features is None:
+        selected_features = X.keys()
+    if cleaned is None:
+        cleaned = X
+    scaler = StandardScaler()
+    scaler.fit(cleaned[selected_features])
+    transformed = scaler.transform(X[selected_features])
+    clf = svm.SVR(kernel='linear', C=1, max_iter=200000)
+
+    kernel_range = ['linear', 'poly', 'rbf', 'sigmoid']
+    C_range = [1.0,1.25,1.5,2.0,2.5,3.0]
+    param_grid = { "kernel": kernel_range, "C": C_range}
+
+    gs = GridSearchCV(estimator=clf, param_grid=param_grid, scoring='neg_mean_squared_error', cv=KFold(n_splits=3), n_jobs=-1)
+
+    gs = gs.fit(transformed, Y.reshape(-1))
+
+    print(gs.cv_results_)
+    print(gs.best_params_)
+    print(gs.best_score_)
+
+    scores = gs.cv_results_['mean_test_score'].reshape(len(C_range),
+                                                       len(kernel_range))
+
+    stds = gs.cv_results_['std_test_score'].reshape(len(C_range),
+                                                    len(kernel_range))
+
+    fig = plt.figure()
+    ax1 = fig.add_subplot(1,2,1)
+    plt.imshow(-scores, interpolation='nearest', cmap=plt.cm.hot,
+               norm=MidpointNormalize(vmin=-0.1, midpoint=-0.04))
+    plt.xlabel('kernel')
+    plt.ylabel('C')
+    plt.colorbar()
+    plt.xticks(np.arange(len(kernel_range)), kernel_range, rotation=45)
+    plt.yticks(np.arange(len(C_range)), C_range)
+    ax1.set_title('Validation accuracy')
+
+    ax2 = fig.add_subplot(1,2,2)
+    plt.imshow(-stds, interpolation='nearest', cmap=plt.cm.hot,
+               norm=MidpointNormalize(vmin=-0.1, midpoint=-0.003))
+    plt.colorbar()
+    plt.xticks(np.arange(len(kernel_range)), kernel_range, rotation=45)
+    plt.yticks(np.arange(len(C_range)), C_range)
+    ax2.set_title('Validation std-dev')
+
+    plt.show()
+
+    params = gs.best_params_
+    params['C'] = 2.0
+    svr = svm.SVR(**params)
+    scores = cross_val_score(svr, transformed, Y, cv=KFold(n_splits=5), scoring=model_accuracy)
+    print("CV scores: ", scores)
+
+    model = svr.fit(scaler.transform(X[selected_features]), Y)
+    print("Accuracy on training set: {}".format(model_accuracy(model, transformed, Y)))
+
+    return model, scaler
+
+
+def train_rf(X, Y, selected_features=None, cleaned=None):
+    if selected_features is None:
+        selected_features = X.keys()
+    if cleaned is None:
+        cleaned = X
+    scaler = StandardScaler()
+    scaler.fit(cleaned[selected_features])
+    transformed = scaler.transform(X[selected_features])
+    clf = RandomForestRegressor(bootstrap=True, oob_score=True)
+
+    estimators_range = [100,1000,5000]
+    max_features_range = ['auto','sqrt','log2',100]
+    param_grid = { "n_estimators": estimators_range, "max_features": max_features_range}
+
+    gs = GridSearchCV(estimator=clf, param_grid=param_grid, scoring='neg_mean_squared_error', cv=KFold(n_splits=3), n_jobs=-1)
+
+    gs = gs.fit(transformed, Y.reshape(-1))
+
+    print(gs.cv_results_)
+    print(gs.best_params_)
+    print(gs.best_score_)
+
+    scores = gs.cv_results_['mean_test_score'].reshape(len(estimators_range),
+                                                       len(max_features_range))
+
+    stds = gs.cv_results_['std_test_score'].reshape(len(estimators_range),
+                                                    len(max_features_range))
+
+    fig = plt.figure()
+    ax1 = fig.add_subplot(1,2,1)
+    plt.imshow(-scores, interpolation='nearest', cmap=plt.cm.hot,
+               norm=MidpointNormalize(vmin=-0.1, midpoint=-0.04))
+    plt.xlabel('kernel')
+    plt.ylabel('C')
+    plt.colorbar()
+    plt.xticks(np.arange(len(max_features_range)), max_features_range, rotation=45)
+    plt.yticks(np.arange(len(estimators_range)), estimators_range)
+    ax1.set_title('Validation accuracy')
+
+    ax2 = fig.add_subplot(1,2,2)
+    plt.imshow(-stds, interpolation='nearest', cmap=plt.cm.hot,
+               norm=MidpointNormalize(vmin=-0.1, midpoint=-0.003))
+    plt.colorbar()
+    plt.xticks(np.arange(len(max_features_range)), max_features_range, rotation=45)
+    plt.yticks(np.arange(len(estimators_range)), estimators_range)
+    ax2.set_title('Validation std-dev')
+
+    plt.show()
+
+    params = gs.best_params_
+    rf = RandomForestRegressor(**params)
+    scores = cross_val_score(rf, transformed, Y, cv=KFold(n_splits=5), scoring=model_accuracy)
+    print("CV scores: ", scores)
+
+    model = rf.fit(scaler.transform(X[selected_features]), Y)
+    print("Accuracy on training set: {}".format(model_accuracy(model, transformed, Y)))
+
+    return model, scaler
+
+
+def train_lasso(X, Y, selected_features=None, cleaned=None):
+    if selected_features is None:
+        selected_features = X.keys()
+    if cleaned is None:
+        cleaned = X
+    scaler = StandardScaler()
+    scaler.fit(cleaned[selected_features])
+    transformed = scaler.transform(X[selected_features])
+    clf = linear_model.Lasso(alpha = 0.1, fit_intercept=True)
+
+    estimators_range = [0.75,0.1,0.5,1]
+    max_features_range = [False,True]
+    param_grid = { "alpha": estimators_range, "normalize": max_features_range}
+
+    gs = GridSearchCV(estimator=clf, param_grid=param_grid, scoring='neg_mean_squared_error', cv=KFold(n_splits=3), n_jobs=-1)
+
+    gs = gs.fit(transformed, Y.reshape(-1))
+
+    print(gs.cv_results_)
+    print(gs.best_params_)
+    print(gs.best_score_)
+
+    scores = gs.cv_results_['mean_test_score'].reshape(len(estimators_range),
+                                                       len(max_features_range))
+
+    stds = gs.cv_results_['std_test_score'].reshape(len(estimators_range),
+                                                    len(max_features_range))
+
+    fig = plt.figure()
+    ax1 = fig.add_subplot(1,2,1)
+    plt.imshow(-scores, interpolation='nearest', cmap=plt.cm.hot,
+               norm=MidpointNormalize(vmin=-0.1, midpoint=-0.04))
+    plt.xlabel('kernel')
+    plt.ylabel('C')
+    plt.colorbar()
+    plt.xticks(np.arange(len(max_features_range)), max_features_range, rotation=45)
+    plt.yticks(np.arange(len(estimators_range)), estimators_range)
+    ax1.set_title('Validation accuracy')
+
+    ax2 = fig.add_subplot(1,2,2)
+    plt.imshow(-stds, interpolation='nearest', cmap=plt.cm.hot,
+               norm=MidpointNormalize(vmin=-0.1, midpoint=-0.003))
+    plt.colorbar()
+    plt.xticks(np.arange(len(max_features_range)), max_features_range, rotation=45)
+    plt.yticks(np.arange(len(estimators_range)), estimators_range)
+    ax2.set_title('Validation std-dev')
+
+    plt.show()
+
+    params = gs.best_params_
+    clf = linear_model.Lasso(**params)
+    scores = cross_val_score(clf, transformed, Y, cv=KFold(n_splits=5), scoring=model_accuracy)
+    print("CV scores: ", scores)
+
+    model = clf.fit(scaler.transform(X[selected_features]), Y)
+    print("Accuracy on training set: {}".format(model_accuracy(model, transformed, Y)))
+
+    return model, scaler
+
+
+def train_logistic(X, Y, selected_features=None, cleaned=None):
+    if selected_features is None:
+        selected_features = X.keys()
+    if cleaned is None:
+        cleaned = X
+    scaler = StandardScaler()
+    scaler.fit(cleaned[selected_features])
+    transformed = scaler.transform(X[selected_features])
+    clf = linear_model.LogisticRegression()
+
+    estimators_range = ['newton-cg', 'lbfgs', 'liblinear', 'sag', 'saga']
+    max_features_range = [0.1,0.75,1,1.5,2]
+    param_grid = { "solver": estimators_range, "C": max_features_range}
+
+    gs = GridSearchCV(estimator=clf, param_grid=param_grid, scoring='neg_mean_squared_error', cv=KFold(n_splits=3), n_jobs=-1)
+
+    gs = gs.fit(transformed, Y.reshape(-1))
+
+    print(gs.cv_results_)
+    print(gs.best_params_)
+    print(gs.best_score_)
+
+    scores = gs.cv_results_['mean_test_score'].reshape(len(estimators_range),
+                                                       len(max_features_range))
+
+    stds = gs.cv_results_['std_test_score'].reshape(len(estimators_range),
+                                                    len(max_features_range))
+
+    fig = plt.figure()
+    ax1 = fig.add_subplot(1,2,1)
+    plt.imshow(-scores, interpolation='nearest', cmap=plt.cm.hot,
+               norm=MidpointNormalize(vmin=-0.1, midpoint=-0.04))
+    plt.xlabel('kernel')
+    plt.ylabel('C')
+    plt.colorbar()
+    plt.xticks(np.arange(len(max_features_range)), max_features_range, rotation=45)
+    plt.yticks(np.arange(len(estimators_range)), estimators_range)
+    ax1.set_title('Validation accuracy')
+
+    ax2 = fig.add_subplot(1,2,2)
+    plt.imshow(-stds, interpolation='nearest', cmap=plt.cm.hot,
+               norm=MidpointNormalize(vmin=-0.1, midpoint=-0.003))
+    plt.colorbar()
+    plt.xticks(np.arange(len(max_features_range)), max_features_range, rotation=45)
+    plt.yticks(np.arange(len(estimators_range)), estimators_range)
+    ax2.set_title('Validation std-dev')
+
+    plt.show()
+
+    params = gs.best_params_
+    clf = linear_model.LogisticRegression(**params)
+    scores = cross_val_score(clf, transformed, Y, cv=KFold(n_splits=5), scoring=model_accuracy)
+    print("CV scores: ", scores)
+
+    model = clf.fit(scaler.transform(X[selected_features]), Y)
+    print("Accuracy on training set: {}".format(model_accuracy(model, transformed, Y)))
+
+    return model, scaler
+
+
 def main():
     df = load_dataset()
     cleaned = clean_dataset(df)
@@ -197,16 +464,7 @@ def main():
     del test['SalePrice']
     print("{} training case, {} test, targets: {}".format(train.shape, test.shape, train_prices.shape))
     selected_features = train.keys()
-    scaler = StandardScaler()
-    scaler.fit(cleaned[selected_features])
-    transformed = scaler.transform(train[selected_features])
-    clf = svm.SVR(kernel='linear', C=1, max_iter=200000)
-
-    scores = cross_val_score(clf, transformed, train_prices, cv=KFold(n_splits=5), scoring=model_accuracy)
-    print("CV scores: ", scores)
-
-    model = clf.fit(scaler.transform(train[selected_features]), train_prices)
-    print("Accuracy on training set: {}".format(model_accuracy(model, transformed, train_prices)))
+    model, scaler = train_svr(train, train_prices, selected_features=selected_features)
 
     predictions = model.predict(scaler.transform(test[selected_features]))
     predictions = np.exp(predictions + 11.5)
