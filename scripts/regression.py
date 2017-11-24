@@ -245,6 +245,82 @@ class MidpointNormalize(Normalize):
         x, y = [self.vmin, self.midpoint, self.vmax], [0, 0.5, 1]
         return np.ma.masked_array(np.interp(value, x, y))
 
+from sklearn.ensemble import GradientBoostingRegressor
+
+def train_gbr(X, Y, selected_features=None, cleaned=None):
+    if selected_features is None:
+        selected_features = X.keys()
+    if cleaned is None:
+        cleaned = X
+    scaler = StandardScaler()
+    scaler.fit(cleaned[selected_features])
+    transformed = scaler.transform(X[selected_features])
+
+    param_grid = {
+        "n_estimators": [300, 400, 500, 600, 750, 800],
+        "learning_rate": [0.5, 0.1, 0.05, 0.01]
+        # "subsample": [ 1, 0.95, 0.9,0.8]
+        # "loss": ['ls', 'lad', 'huber', 'quantile']
+        # "max_features": [80, 100, 120, 150],
+        # "max_depth": [1, 2]
+    }
+
+    gbr = GradientBoostingRegressor(n_estimators=600, learning_rate=0.05, subsample=0.9,
+    max_depth = 2, max_features = 120, random_state = 0, loss = 'ls').fit(transformed, Y)
+    # params = grid_search_gbr(gbr, transformed, Y, param_grid)
+    # gbr = GradientBoostingRegressor(**params)
+
+    scores = cross_val_score(gbr, transformed, Y, cv=KFold(n_splits=5), scoring=model_accuracy)
+    print("CV scores: ", scores)
+
+    model = gbr.fit(scaler.transform(X[selected_features]), Y)
+    print("Accuracy on training set: {}".format(model_accuracy(model, transformed, Y)))
+
+    return model, scaler
+
+def grid_search_gbr(gbr, X, Y, param_grid):
+    k1 = 'n_estimators'
+    k2 = 'learning_rate'
+    dim1 = param_grid[k1]
+    dim2 = param_grid[k2]
+
+    gs = GridSearchCV(estimator=gbr, param_grid=param_grid, scoring='neg_mean_squared_error', cv=KFold(n_splits=3), n_jobs=-1)
+
+    gs = gs.fit(X, Y.reshape(-1))
+
+    print(gs.cv_results_)
+    print(gs.best_params_)
+    print(gs.best_score_)
+
+    scores = gs.cv_results_['mean_test_score'].reshape(len(dim2),
+                                                       len(dim1))
+
+    stds = gs.cv_results_['std_test_score'].reshape(len(dim2),
+                                                    len(dim1))
+
+    fig = plt.figure()
+    ax1 = fig.add_subplot(1,2,1)
+    plt.imshow(-scores, interpolation='nearest', cmap=plt.cm.hot,
+               norm=MidpointNormalize(vmin=0.013, midpoint=0.016))
+    plt.xlabel(k1)
+    plt.ylabel(k2)
+    plt.colorbar()
+    plt.xticks(np.arange(len(dim1)), dim1, rotation=45)
+    plt.yticks(np.arange(len(dim2)), dim2)
+    ax1.set_title('Validation accuracy')
+
+    ax2 = fig.add_subplot(1,2,2)
+    plt.imshow(-stds, interpolation='nearest', cmap=plt.cm.hot,
+               norm=MidpointNormalize(vmin=-0.003, midpoint=-0.002))
+    plt.colorbar()
+    plt.xticks(np.arange(len(dim1)), dim1, rotation=45)
+    plt.yticks(np.arange(len(dim2)), dim2)
+    ax2.set_title('Validation std-dev')
+
+    plt.show()
+
+    return gs.best_params_
+
 
 def train_svr(X, Y, selected_features=None, cleaned=None):
     if selected_features is None:
@@ -298,6 +374,7 @@ def train_svr(X, Y, selected_features=None, cleaned=None):
     # params = gs.best_params_
     # params['C'] = 2.0
     # svr = svm.SVR(**params)
+
     scores = cross_val_score(svr, transformed, Y, cv=KFold(n_splits=5), scoring=model_accuracy)
     print("CV scores: ", scores)
 
@@ -500,7 +577,7 @@ def main():
     del test['SalePrice']
     print("{} training case, {} test, targets: {}".format(train.shape, test.shape, train_prices.shape))
     selected_features = train.keys()
-    model, scaler = train_svr(train, train_prices, selected_features=selected_features)
+    model, scaler = train_gbr(train, train_prices, selected_features=selected_features)
 
     predictions = model.predict(scaler.transform(test[selected_features]))
     predictions = np.exp(predictions + 11.5)
