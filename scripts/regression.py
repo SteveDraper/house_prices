@@ -32,6 +32,19 @@ def regress_year_to_price(data, year_field, out_field):
     data[out_field] = data[year_field].apply(lambda y: log(smoothed_yearly_prices[y]) - 11.7)
 
 
+def regress_date_sold_price(data, out_field):
+    pricing_fields = data[['YrSold', 'MoSold', 'SalePrice']]
+    data['DateSold'] = pricing_fields['YrSold'] + pricing_fields['MoSold']
+    mean_date_price = data.groupby(['DateSold'])['SalePrice'].mean()
+    mean_year_price = data.groupby(['YrSold'])['SalePrice'].mean()
+    mean_month_price = data.groupby(['MoSold'])['SalePrice'].mean()
+    data['YrSoldPrice'] = data['YrSold'].apply(lambda y: mean_year_price[y])
+    #data['YrSoldPrice'] = data['YrSold'].apply(lambda y: log(mean_year_price[y]) - 11.7)
+    #data['MoSoldPrice'] = data['MoSold'].apply(lambda y: log(mean_month_price[y]) - 11.7)
+    # data[out_field] = data['DateSold'].apply(lambda y: log(mean_date_price[y]) - 11.7)
+    del data['DateSold']
+
+
 def clean_dataset(raw):
     # Notes:
     #   MSZoning has some rare 'NA' values which we include in the one-hot encoding
@@ -98,7 +111,9 @@ def clean_dataset(raw):
         'GarageFinish',
         'GarageQual',
         'GarageCond',
-        'MiscFeature'
+        'MiscFeature',
+        #'YrSold',
+        #'MoSold',
     ]
     yes_no_columns = [
         'CentralAir',
@@ -125,7 +140,7 @@ def clean_dataset(raw):
     removed_from_cleaned = [
         '1stFlrSF',
         '2ndFlrSF',
-        'LotArea',
+        #'LotArea',
         'YearBuilt',
         'YearRemodAdd',
         'BsmtFinSF1',
@@ -137,11 +152,18 @@ def clean_dataset(raw):
         'PoolArea',
         'PoolQC',
         'YrSold',
+        'MoSold',
         'Exterior1st',
-        'Exterior2nd'
+        'Exterior2nd',
+        'PricePerSF'
     ]
     use_log_scale = [
-        'TotalFloorSF'
+        'TotalFloorSF',
+        'FullBath',
+        'HalfBath',
+        'NeighborhoodPriceEstimate',
+        'GarageArea',
+        'LotArea'
     ]
     cleaned = raw.fillna(constant_missing_replacements)
     for column in replace_missing_modal:
@@ -149,9 +171,14 @@ def clean_dataset(raw):
     cleaned['HasGarage'] = cleaned['GarageType'].apply(lambda a: float(not pd.isnull(a)))
     cleaned['HasAboveGrnd'] = (cleaned['1stFlrSF'] + cleaned['2ndFlrSF']).apply(lambda a: float(a > 0))
     cleaned['HasBasement'] = cleaned['BsmtQual'].apply(lambda a: float(not pd.isnull(a)))
-    cleaned['Has2ndFloor'] = cleaned['2ndFlrSF'].apply(lambda a: float(a > 0))
+    #cleaned['Has2ndFloor'] = cleaned['2ndFlrSF'].apply(lambda a: float(a > 0))
+    cleaned['HasMultipleFloors'] = cleaned.apply(lambda row: (int(row['1stFlrSF'] > 0) + int(row['2ndFlrSF'] > 0) + int(row['TotalBsmtSF'] > 0)) > 1, axis=1)
     cleaned['TotalFloorSF'] = cleaned['1stFlrSF'] + cleaned['2ndFlrSF'] + cleaned['TotalBsmtSF']
     cleaned['LowQualFinSF'] /= cleaned['TotalFloorSF']
+    cleaned['PricePerSF'] = cleaned['SalePrice'] / cleaned['TotalFloorSF']
+    cost_per_sf = cleaned.loc['train'].groupby(['Neighborhood'])['PricePerSF'].mean()
+    # cleaned['NeighborhoodPriceEstimate'] = cleaned.apply(lambda row: cost_per_sf[row['Neighborhood']]*row['TotalFloorSF'], axis=1)
+    cleaned['NeighborhoodPriceEstimate'] = cleaned['Neighborhood'].apply(lambda n: cost_per_sf[n])
     cleaned['GrLivArea'] /= cleaned['TotalFloorSF']
     cleaned = pd.get_dummies(cleaned, columns=simple_one_hot_columns)
     cleaned = pd.get_dummies(cleaned, dummy_na=True, columns=drop_nan_one_hot_columns)
@@ -170,24 +197,30 @@ def clean_dataset(raw):
     cleaned.loc[cleaned['LotFrontage'].isnull(), 'LotFrontage'] = 0
     cleaned.loc[cleaned['LotFrontage'] > 0, 'LotDepth'] = cleaned['LotArea']/cleaned['LotFrontage']
     cleaned.loc[cleaned['LotFrontage'] == 0, 'LotDepth'] = cleaned['LotArea'].apply(lambda a: sqrt(a))
-    cleaned['OverallQual'] = cleaned['OverallQual'].apply(lambda q: (q-1.)/9.)
-    cleaned['OverallCond'] = cleaned['OverallCond'].apply(lambda q: (q-1.)/9.)
+    cleaned['OverallQual'] = cleaned['OverallQual'] #.apply(lambda q: (q-1.)/9.)
+    cleaned['OverallCond'] = cleaned['OverallCond'] #.apply(lambda q: (q-1.)/9.)
     regress_year_to_price(cleaned, 'YearBuilt', 'YearBuiltPrice')
     regress_year_to_price(cleaned, 'YearRemodAdd', 'YearRemodAddPrice')
+    # regress_date_sold_price(cleaned, 'DateSoldPrice')
     cleaned['MasVnrArea'] = cleaned['MasVnrArea'].apply(lambda a: log(a+1.))
     cleaned['FinishedBsmtProp'] = ((cleaned['BsmtFinSF1'] + cleaned['BsmtFinSF2']) / cleaned['TotalBsmtSF']).fillna(0.)
     cleaned['UnfinishedBsmtProp'] = (cleaned['BsmtUnfSF'] / cleaned['TotalBsmtSF']).fillna(0.)
     cleaned['TotalBsmtSF'] /= cleaned['TotalFloorSF']
     cleaned['FullBath'] += cleaned['BsmtFullBath']
     cleaned['HalfBath'] += cleaned['BsmtHalfBath']
-    cleaned['GarageArea'] = cleaned['GarageArea'].apply(lambda q: q/1500)
+    cleaned['GarageArea'] = cleaned['GarageArea'] #.apply(lambda q: q/1500)
     cleaned['HasPool'] = cleaned['PoolArea'].apply(lambda q: float(q > 0))
 
+    epsilon = 0.00001
     for column in use_log_scale:
-        cleaned[column] = cleaned[column].apply(lambda v: log(v))
+        cleaned[column] = cleaned[column].apply(lambda v: log(v + epsilon))
 
     for column in removed_from_cleaned:
         del cleaned[column]
+
+    # for column in cleaned.keys():
+    #     if not column == 'SalePrice':
+    #         cleaned['Log_' + str(column)] = cleaned[column].apply(lambda v: log(v + epsilon))
 
     print("Cleaned data shape: ", cleaned.shape)
     return cleaned
@@ -221,55 +254,55 @@ def train_svr(X, Y, selected_features=None, cleaned=None):
     scaler = StandardScaler()
     scaler.fit(cleaned[selected_features])
     transformed = scaler.transform(X[selected_features])
-    clf = svm.SVR(kernel='linear', C=1, max_iter=200000)
-
-    kernel_range = ['linear', 'poly', 'rbf', 'sigmoid']
-    C_range = [1.0,1.25,1.5,2.0,2.5,3.0]
-    param_grid = { "kernel": kernel_range, "C": C_range}
-
-    gs = GridSearchCV(estimator=clf, param_grid=param_grid, scoring='neg_mean_squared_error', cv=KFold(n_splits=3), n_jobs=-1)
-
-    gs = gs.fit(transformed, Y.reshape(-1))
-
-    print(gs.cv_results_)
-    print(gs.best_params_)
-    print(gs.best_score_)
-
-    scores = gs.cv_results_['mean_test_score'].reshape(len(C_range),
-                                                       len(kernel_range))
-
-    stds = gs.cv_results_['std_test_score'].reshape(len(C_range),
-                                                    len(kernel_range))
-
-    fig = plt.figure()
-    ax1 = fig.add_subplot(1,2,1)
-    plt.imshow(-scores, interpolation='nearest', cmap=plt.cm.hot,
-               norm=MidpointNormalize(vmin=-0.1, midpoint=-0.04))
-    plt.xlabel('kernel')
-    plt.ylabel('C')
-    plt.colorbar()
-    plt.xticks(np.arange(len(kernel_range)), kernel_range, rotation=45)
-    plt.yticks(np.arange(len(C_range)), C_range)
-    ax1.set_title('Validation accuracy')
-
-    ax2 = fig.add_subplot(1,2,2)
-    plt.imshow(-stds, interpolation='nearest', cmap=plt.cm.hot,
-               norm=MidpointNormalize(vmin=-0.1, midpoint=-0.003))
-    plt.colorbar()
-    plt.xticks(np.arange(len(kernel_range)), kernel_range, rotation=45)
-    plt.yticks(np.arange(len(C_range)), C_range)
-    ax2.set_title('Validation std-dev')
-
-    plt.show()
-
-    params = gs.best_params_
-    params['C'] = 2.0
-    svr = svm.SVR(**params)
+    svr = svm.SVR(kernel='linear', C=2.0) ##, max_iter=200000)
+    #
+    # epsilon_range = [0.1]
+    # C_range = [1.5,2.0,2.5]
+    # param_grid = { "epsilon": epsilon_range, "C": C_range}
+    #
+    # gs = GridSearchCV(estimator=clf, param_grid=param_grid, scoring='neg_mean_squared_error', cv=KFold(n_splits=3), n_jobs=-1)
+    #
+    # gs = gs.fit(transformed, Y.reshape(-1))
+    #
+    # print(gs.cv_results_)
+    # print(gs.best_params_)
+    # print(gs.best_score_)
+    #
+    # scores = gs.cv_results_['mean_test_score'].reshape(len(C_range),
+    #                                                    len(epsilon_range))
+    #
+    # stds = gs.cv_results_['std_test_score'].reshape(len(C_range),
+    #                                                 len(epsilon_range))
+    #
+    # fig = plt.figure()
+    # ax1 = fig.add_subplot(1,2,1)
+    # plt.imshow(-scores, interpolation='nearest', cmap=plt.cm.hot,
+    #            norm=MidpointNormalize(vmin=-0.1, midpoint=-0.04))
+    # plt.xlabel('kernel')
+    # plt.ylabel('C')
+    # plt.colorbar()
+    # plt.xticks(np.arange(len(epsilon_range)), epsilon_range, rotation=45)
+    # plt.yticks(np.arange(len(C_range)), C_range)
+    # ax1.set_title('Validation accuracy')
+    #
+    # ax2 = fig.add_subplot(1,2,2)
+    # plt.imshow(-stds, interpolation='nearest', cmap=plt.cm.hot,
+    #            norm=MidpointNormalize(vmin=-0.1, midpoint=-0.003))
+    # plt.colorbar()
+    # plt.xticks(np.arange(len(epsilon_range)), epsilon_range, rotation=45)
+    # plt.yticks(np.arange(len(C_range)), C_range)
+    # ax2.set_title('Validation std-dev')
+    #
+    # plt.show()
+    #
+    # params = gs.best_params_
+    # params['C'] = 2.0
+    # svr = svm.SVR(**params)
     scores = cross_val_score(svr, transformed, Y, cv=KFold(n_splits=5), scoring=model_accuracy)
     print("CV scores: ", scores)
 
     model = svr.fit(scaler.transform(X[selected_features]), Y)
-    print("Accuracy on training set: {}".format(model_accuracy(model, transformed, Y)))
+    print("Loss on training set: {}".format(model_accuracy(model, transformed, Y)))
 
     return model, scaler
 
@@ -455,8 +488,11 @@ def train_logistic(X, Y, selected_features=None, cleaned=None):
 
 
 def main():
+    nans = lambda df: df[df.isnull().any(axis=1)]
+
     df = load_dataset()
     cleaned = clean_dataset(df)
+    # hasNan = nans(cleaned)
     train = cleaned.loc['train']
     test = cleaned.loc['test']
     train_prices = train['SalePrice'].apply(lambda y: log(y)-11.5)
