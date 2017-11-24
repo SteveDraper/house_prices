@@ -257,16 +257,17 @@ def train_gbr(X, Y, selected_features=None, cleaned=None):
     transformed = scaler.transform(X[selected_features])
 
     param_grid = {
-        "n_estimators": [300, 400, 500, 600, 750, 800],
-        "learning_rate": [0.5, 0.1, 0.05, 0.01]
-        # "subsample": [ 1, 0.95, 0.9,0.8]
+        "n_estimators": [500, 600, 700, 800, 900],
+        #"learning_rate": [0.5, 0.1, 0.05, 0.04]
+        "subsample": [ 1, 0.9,0.8, 0.7, 0.6],
         # "loss": ['ls', 'lad', 'huber', 'quantile']
-        # "max_features": [80, 100, 120, 150],
-        # "max_depth": [1, 2]
+        #"max_features": [80, 90, 100, 120, 130],
+        # "max_depth": [2, 3, 4]
     }
-
-    gbr = GradientBoostingRegressor(n_estimators=600, learning_rate=0.05, subsample=0.9,
-    max_depth = 2, max_features = 120, random_state = 0, loss = 'ls').fit(transformed, Y)
+    # gbr = GradientBoostingRegressor(n_estimators=600, learning_rate=0.05, subsample=0.8,
+    # max_depth = 2, max_features = 100, random_state = 0, loss = 'ls').fit(transformed, Y)
+    gbr = GradientBoostingRegressor(n_estimators=700, learning_rate=0.05, subsample=0.8,
+    max_depth = 3, max_features = 100, random_state = 0, loss = 'ls').fit(transformed, Y)
     # params = grid_search_gbr(gbr, transformed, Y, param_grid)
     # gbr = GradientBoostingRegressor(**params)
 
@@ -279,8 +280,9 @@ def train_gbr(X, Y, selected_features=None, cleaned=None):
     return model, scaler
 
 def grid_search_gbr(gbr, X, Y, param_grid):
-    k1 = 'n_estimators'
-    k2 = 'learning_rate'
+    feats = list(param_grid.keys())
+    k1 = feats[0]
+    k2 = feats[1]
     dim1 = param_grid[k1]
     dim2 = param_grid[k2]
 
