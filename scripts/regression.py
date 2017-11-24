@@ -112,6 +112,7 @@ def clean_dataset(raw):
         'GarageQual',
         'GarageCond',
         'MiscFeature',
+        'SeasonSold',
         #'YrSold',
         #'MoSold',
     ]
@@ -161,6 +162,8 @@ def clean_dataset(raw):
         'TotalFloorSF',
         'FullBath',
         'HalfBath',
+        'KitchenAbvGr',
+        'BedroomAbvGr',
         'NeighborhoodPriceEstimate',
         'GarageArea',
         'LotArea'
@@ -168,6 +171,7 @@ def clean_dataset(raw):
     cleaned = raw.fillna(constant_missing_replacements)
     for column in replace_missing_modal:
         cleaned[column].fillna(cleaned[column].mode())
+    cleaned['SeasonSold'] = cleaned['MoSold'].apply(lambda m: int(m/4))
     cleaned['HasGarage'] = cleaned['GarageType'].apply(lambda a: float(not pd.isnull(a)))
     cleaned['HasAboveGrnd'] = (cleaned['1stFlrSF'] + cleaned['2ndFlrSF']).apply(lambda a: float(a > 0))
     cleaned['HasBasement'] = cleaned['BsmtQual'].apply(lambda a: float(not pd.isnull(a)))
@@ -211,7 +215,7 @@ def clean_dataset(raw):
     cleaned['GarageArea'] = cleaned['GarageArea'] #.apply(lambda q: q/1500)
     cleaned['HasPool'] = cleaned['PoolArea'].apply(lambda q: float(q > 0))
 
-    epsilon = 0.00001
+    epsilon = 0.5
     for column in use_log_scale:
         cleaned[column] = cleaned[column].apply(lambda v: log(v + epsilon))
 
@@ -332,7 +336,7 @@ def train_svr(X, Y, selected_features=None, cleaned=None):
     scaler = StandardScaler()
     scaler.fit(cleaned[selected_features])
     transformed = scaler.transform(X[selected_features])
-    svr = svm.SVR(kernel='linear', C=2.0) ##, max_iter=200000)
+    svr = svm.SVR(kernel='linear', C=0.1) ##, max_iter=200000)
     #
     # epsilon_range = [0.1]
     # C_range = [1.5,2.0,2.5]
