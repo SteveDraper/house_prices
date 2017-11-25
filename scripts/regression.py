@@ -228,6 +228,7 @@ def clean_dataset(raw):
     regress_year_to_price(cleaned, 'YearRemodAdd', 'YearRemodAddPrice')
     regress_date_sold_price(cleaned, 'DateSoldPrice')
     cleaned['MasVnrArea'] = cleaned['MasVnrArea'] #.apply(lambda a: log(a+1.))
+
     cleaned['FinishedBsmtProp'] = ((cleaned['BsmtFinSF1'] + cleaned['BsmtFinSF2']) / cleaned['TotalBsmtSF']).fillna(0.)
     cleaned['UnfinishedBsmtProp'] = (cleaned['BsmtUnfSF'] / cleaned['TotalBsmtSF']).fillna(0.)
     cleaned['TotalBsmtSF'] /= cleaned['TotalFloorSF']
@@ -262,6 +263,7 @@ def model_accuracy(model, X, Y):
 # the values of interest.
 
 class MidpointNormalize(Normalize):
+
     def __init__(self, vmin=None, vmax=None, midpoint=None, clip=False):
         self.midpoint = midpoint
         Normalize.__init__(self, vmin, vmax, clip)
@@ -271,10 +273,52 @@ class MidpointNormalize(Normalize):
         return np.ma.masked_array(np.interp(value, x, y))
 
 
+from sklearn import linear_model
+
+def train_ens(X, Y, selected_features=None, cleaned=None):
+    if selected_features is None:
+        selected_features = X.keys()
+    if cleaned is None:
+        cleaned = X
+    scaler = StandardScaler()
+    scaler.fit(cleaned)
+    transformed = scaler.transform(X)
+
+    params = {
+        "alpha": 0.01,
+        "l1_ratio": 0.3,
+       # "max_iter": 100000
+    }
+
+    param_grid = {
+        "alphas": [0.003, 0.005, 0.01, 0.05, 0.1, 1],
+        "l1_ratio": [.01, .1, 0.3, .5, 0.7, .9, .99],
+    }
+
+    ens = linear_model.ElasticNetCV(**param_grid, cv=KFold(n_splits=3), n_jobs=-1)
+    ens = ens.fit(transformed, Y.values.reshape(-1))
+    best_params = { "alpha": ens.alpha_, "l1_ratio": ens.l1_ratio_}
+    print(best_params)
+
+    params.update(best_params)
+    ens = linear_model.ElasticNet(**params)
+
+    scores = cross_val_score(ens, transformed, Y, cv=KFold(n_splits=10), scoring=model_accuracy)
+    print("CV scores: ", scores)
+    print("mean CV score: ", scores.mean())
+    print("std CV score: ", scores.std())
+
+    model = ens.fit(transformed, Y)
+    print("Accuracy on training set: {}".format(model_accuracy(model, transformed, Y)))
+
+    return model, scaler #, important_feats
+
+
 from sklearn.ensemble import GradientBoostingRegressor
 
-
-def train_gbr(X, Y, cleaned=None):
+def train_gbr(X, Y, selected_features=None, cleaned=None):
+    if selected_features is None:
+        selected_features = X.keys()
     if cleaned is None:
         cleaned = X
     #scaler = StandardScaler(with_mean=True, with_std=True)
@@ -282,45 +326,70 @@ def train_gbr(X, Y, cleaned=None):
     scaler.fit(cleaned)
     transformed = scaler.transform(X)
 
-    param_grid = {
-        "n_estimators": [500, 600, 700, 800, 900],
-        #"learning_rate": [0.5, 0.1, 0.05, 0.04]
-        "subsample": [ 0.8, 0.7, 0.6],
-        # "loss": ['ls', 'lad', 'huber', 'quantile']
-        "max_features": [80, 90, 100, 120],
-         "max_depth": [2, 3]
+    params = {
+        "n_estimators": 1200,
+        "learning_rate": 0.03,
+        "subsample": 0.8,
+        "loss": 'ls',
+        "max_features": 60,
+        # "min_samples_leaf": 1,
+        # "min_samples_split": 2,
+        "max_depth": 2
     }
 
-    gbr = GradientBoostingRegressor(n_estimators=500, learning_rate=0.03, subsample=0.8,
-    max_depth = 3, max_features=80, random_state = 0, loss = 'ls').fit(transformed, Y)
-    # params = grid_search_gbr(gbr, transformed, Y, param_grid)
+    param_grid = {
+        "n_estimators": [600,800,1000,1200, 1400, 1600, 1800],
+        # "learning_rate": [0.1, 0.08, 0.05, 0.03, 0.02],
+        # "subsample": [ 0.6, 0.65, 0.7, 0.75, 0.8 ],
+        # "loss": ['ls', 'lad', 'huber', 'quantile']
+        "max_features": [10,20, 30, 40, 50, 60],
+        #"min_samples_leaf": [1, 2],
+       #  "min_samples_split": [2, 3, 4, 5, 6],
+       # "max_depth": [2, 3]
+    }
+
+
+    gbr = GradientBoostingRegressor(**params).fit(transformed, Y)
+    importances = pd.Series(gbr.feature_importances_, index=selected_features).sort_values(ascending=False)
+    print("Important features: {}", list(importances.keys()[:20]))
+    # important_feats = list(importances.head(200).keys())
+    # scaler = StandardScaler()
+    # scaler.fit(cleaned[important_feats])
+    # transformed = scaler.transform(X[important_feats])
+
+    # best_params = grid_search_gbr(gbr, transformed, Y, param_grid)
+    # params.update(best_params)
     # gbr = GradientBoostingRegressor(**params)
 
-    scores = cross_val_score(gbr, transformed, Y, cv=KFold(n_splits=10), scoring=model_accuracy)
-
+    scores = cross_val_score(gbr, transformed, Y, cv=KFold(n_splits=5), scoring=model_accuracy)
     print("CV scores: ", scores)
     print("mean CV score: ", scores.mean())
     print("std CV score: ", scores.std())
 
-    model = gbr.fit(scaler.transform(X), Y)
+    model = gbr.fit(transformed, Y)
     print("Accuracy on training set: {}".format(model_accuracy(model, transformed, Y)))
 
-    return model, scaler
+
+    return model, scaler #, important_feats
+
 
 def grid_search_gbr(gbr, X, Y, param_grid):
     feats = list(param_grid.keys())
-    k1 = feats[1]
-    k2 = feats[0]
+    k1 = feats[0]
+    k2 = feats[1]
     dim1 = param_grid[k1]
     dim2 = param_grid[k2]
 
     gs = GridSearchCV(estimator=gbr, param_grid=param_grid, scoring='neg_mean_squared_error', cv=KFold(n_splits=3), n_jobs=-1)
 
-    gs = gs.fit(X, Y.reshape(-1))
+    gs = gs.fit(X, Y.values.reshape(-1))
 
     print(gs.cv_results_)
     print(gs.best_params_)
     print(gs.best_score_)
+
+    if len(feats) > 2:
+        return gs.best_params_
 
     scores = gs.cv_results_['mean_test_score'].reshape(len(dim2),
                                                        len(dim1))
@@ -694,7 +763,7 @@ def main():
 
     predictions = model.predict(scaler.transform(pca_test))
 
-    model2, scaler2 = train_svr(train_no_outliers, train_log_prices)
+    model2, scaler2 = train_ens(train_no_outliers, train_log_prices)
     predictions2 = model2.predict(scaler2.transform(pca_test))
 
     predictions += predictions2
