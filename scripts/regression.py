@@ -2,11 +2,11 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize
-from math import sqrt, log, isnan
+from math import sqrt, log, isnan, exp
 from sklearn import svm
 from sklearn.model_selection import cross_val_score, KFold
 from sklearn.metrics import mean_squared_error
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, RobustScaler
 from sklearn.model_selection import GridSearchCV
 from sklearn.ensemble import RandomForestRegressor
 from sklearn import linear_model
@@ -65,7 +65,7 @@ def clean_dataset(raw):
     #   Handle normalization of cleaned numeric values more generically
     simple_one_hot_columns = [
         'MSSubClass',
-        'Street',
+        #'Street',
         #'LotShape',
         #'LandContour',
         'Utilities',
@@ -87,7 +87,7 @@ def clean_dataset(raw):
         'Electrical',
         #'KitchenQual',
         'Functional',
-        'FireplaceQu',
+        #'FireplaceQu',
         'Fence',
         'SaleType',
         'SaleCondition'
@@ -127,7 +127,8 @@ def clean_dataset(raw):
         'TotalBsmtSF': 0.,
         'BsmtQual': 'TA',
         'GarageQual': 'TA',
-        'GarageFinish': 'RFn'
+        'GarageFinish': 'RFn',
+        'FireplaceQu': 'TA',
     }
     replace_missing_modal = [
         'Electrical',
@@ -189,8 +190,11 @@ def clean_dataset(raw):
     cleaned['HeatingQC'] = cleaned['HeatingQC'].apply(lambda c: qual_values.index(c))
     cleaned['KitchenQual'] = cleaned['KitchenQual'].apply(lambda c: qual_values.index(c))
     cleaned['GarageQual'] = cleaned['GarageQual'].apply(lambda c: qual_values.index(c))
+    cleaned['FireplaceQu'] = cleaned['FireplaceQu'].apply(lambda c: qual_values.index(c))
     cleaned['HasGarage'] = cleaned['GarageType'].apply(lambda a: float(not pd.isnull(a)))
     cleaned['HasBasement'] = cleaned['TotalBsmtSF'].apply(lambda a: (a > 0))
+    cleaned['HasDecking'] = cleaned['WoodDeckSF'].apply(lambda a: (a > 0))
+    cleaned['Street'] = cleaned['Street'].apply(lambda s: int(s == 'Pave'))
 
     #cleaned['Has2ndFloor'] = cleaned['2ndFlrSF'].apply(lambda a: float(a > 0))
     cleaned['HasMultipleFloors'] = cleaned.apply(lambda row: (int(row['1stFlrSF'] > 0) + int(row['2ndFlrSF'] > 0) + int(row['TotalBsmtSF'] > 0)) > 1, axis=1)
@@ -242,6 +246,7 @@ def clean_dataset(raw):
     for column in cleaned.keys():
         if not column == 'SalePrice':
             cleaned['Log_' + str(column)] = cleaned[column].apply(lambda v: log(v + epsilon))
+            cleaned['Quad_' + str(column)] = cleaned[column].apply(lambda v: v*v)
 
     print("Cleaned data shape: ", cleaned.shape)
     return cleaned
@@ -272,7 +277,8 @@ from sklearn.ensemble import GradientBoostingRegressor
 def train_gbr(X, Y, cleaned=None):
     if cleaned is None:
         cleaned = X
-    scaler = StandardScaler()
+    #scaler = StandardScaler(with_mean=True, with_std=True)
+    scaler = RobustScaler()
     scaler.fit(cleaned)
     transformed = scaler.transform(X)
 
@@ -351,7 +357,7 @@ def train_svr(X, Y, selected_features=None, cleaned=None):
         selected_features = X.keys()
     if cleaned is None:
         cleaned = X
-    scaler = StandardScaler()
+    scaler = RobustScaler()
     scaler.fit(cleaned[selected_features])
     transformed = scaler.transform(X[selected_features])
     svr = svm.SVR(kernel='linear', C=2) ##, max_iter=200000)
@@ -587,24 +593,27 @@ def train_logistic(X, Y, selected_features=None, cleaned=None):
 
     return model, scaler
 
-def analyse_correlations(data):
+def analyse_correlations(data, target_field, log_target):
     my_data = data.copy()
-    my_data['LogSalePrice'] = my_data['SalePrice'].apply(lambda p: log(p))
-    del my_data['SalePrice']
-    corr = my_data.corr()['LogSalePrice'].apply(lambda x: abs(x))
-    del corr['LogSalePrice']
+    if log_target:
+        my_data['__target__'] = my_data[target_field].apply(lambda p: log(p))
+    else:
+        my_data['__target__'] = my_data[target_field]
+    del my_data[target_field]
+    corr = my_data.corr()['__target__'].apply(lambda x: abs(x))
+    del corr['__target__']
     corr = corr.nlargest(1000)
 
-    print(corr)
+    corr_lin = corr.loc[corr.index.to_series().apply(lambda s: not s.startswith('Log_') and not s.startswith('Quad_'))]
+
     selected = []
-    for key in corr.index:
-        if not key.startswith('Log_'):
-            if corr[key] > corr['Log_'+key]:
-                selected.append(key)
+    for key in corr_lin.index:
+        if corr[key] >= corr['Log_'+key] and corr[key] >= corr['Quad_' + key]:
+            selected.append(key)
+        elif corr['Log_' + key] >= corr['Quad_' + key]:
+            selected.append('Log_'+key)
         else:
-            other_key = key[4:]
-            if other_key in corr.index and corr[key] > corr[other_key]:
-                selected.append(key)
+            selected.append('Quad_' + key)
     print(selected)
     return selected
 
@@ -612,22 +621,25 @@ def analyse_correlations(data):
 def main():
     nans = lambda df: df[df.isnull().any(axis=1)]
 
+    apply_residuals = False
+
     df = load_dataset()
     cleaned = clean_dataset(df)
     # hasNan = nans(cleaned)
     train = cleaned.loc['train']
     test = cleaned.loc['test']
 
-    selected_features = analyse_correlations(train)
+    selected_features = analyse_correlations(train, 'SalePrice', True)
 
-    train_prices = train['SalePrice'].apply(lambda y: log(y)-11.5)
+    train_prices = train['SalePrice']
+    train_log_prices = train_prices.apply(lambda y: log(y)-11.5)
     del train['SalePrice']
     del test['SalePrice']
     del cleaned['SalePrice']
-    print("{} training case, {} test, targets: {}".format(train.shape, test.shape, train_prices.shape))
+    print("{} training case, {} test, targets: {}".format(train.shape, test.shape, train_log_prices.shape))
 
-    train = train[selected_features]
-    test = test[selected_features]
+    train_log = train[selected_features]
+    test_log = test[selected_features]
     # cleaned_extra_keys = cleaned.keys().tolist()
     # for key in train.keys():
     #     cleaned_extra_keys.remove(key)
@@ -638,13 +650,53 @@ def main():
     # pca.fit(cleaned[selected_features])
     # pca_train = pca.transform(train)
     # pca_test = pca.transform(test)
-    pca_train = train
-    pca_test = test
+    pca_train = train_log #.apply(lambda r: r.apply(lambda x: x*np.random.normal(1.0, 0.02)))
+    pca_test = test_log
     # selected_features = train.keys()
-    model, scaler = train_gbr(pca_train, train_prices)
+    model, scaler = train_gbr(pca_train, train_log_prices)
+
+    # remove outliers
+    pca_train['prediction'] = model.predict(scaler.transform(pca_train))
+    pca_train['error'] = pca_train['prediction'] - train_log_prices
+    pca_train['SalePrice'] = train_log_prices
+    sorted_by_error = pca_train['error'].sort_values(ascending=False)
+    sorted_by_error.hist()
+    plt.show()
+    train_no_outliers = pca_train.loc[abs(pca_train['error']) <= 0.2]
+    train_log_prices = train_no_outliers['SalePrice']
+    del train_no_outliers['error']
+    del train_no_outliers['prediction']
+    del train_no_outliers['SalePrice']
+    model, scaler = train_gbr(train_no_outliers, train_log_prices)
+
+    # construct residual errors
+    if apply_residuals:
+        train_predicted = np.exp(model.predict(scaler.transform(pca_train)) + 11.5)
+        residuals = train_prices - train_predicted
+        train['ResidualError'] = residuals
+
+        rms = sqrt(mean_squared_error(train_prices, train_predicted))
+        print("Training error before residual model: ", rms)
+
+        selected_linear_features = analyse_correlations(train, 'ResidualError', False)
+
+        train_linear = train[selected_linear_features]
+        test_linear = test[selected_linear_features]
+
+        residual_model, residual_scaler = train_gbr(train_linear, residuals)
+
+        train_predicted_residuals = residual_model.predict(residual_scaler.transform(train_linear))
+        train_predicted += train_predicted_residuals
+
+        rms = sqrt(mean_squared_error(train_prices, train_predicted))
+        print("Training error after residual model: ", rms)
 
     predictions = model.predict(scaler.transform(pca_test))
+    predictions = np.exp(predictions + 11.5)
 
+    if apply_residuals:
+        predicted_residuals = residual_model.predict(residual_scaler.transform(test_linear))
+        predictions += predicted_residuals
     # train_pre_2008 = train.loc[train['YrSold'] < 2008]
     # train_2008 =  train.loc[train['YrSold'] == 2008]
     # train_post_2008 = train.loc[train['YrSold'] > 2008]
@@ -681,7 +733,7 @@ def main():
     #
     # predictions = np.concatenate([predictions_pre_2008, predictions_2008, predictions_post_2008])
     # test = pd.concat([test_pre_2008, test_2008, test_post_2008])
-    predictions = np.exp(predictions + 11.5)
+
     prediction_df = pd.DataFrame(predictions, columns=['SalePrice'])
     prediction_df.insert(0, 'Id', test.index)
     prediction_df.to_csv('../predictions.csv', columns=['Id', 'SalePrice'], index=False)
