@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize
-from math import sqrt, log
+from math import sqrt, log, isnan
 from sklearn import svm
 from sklearn.model_selection import cross_val_score, KFold
 from sklearn.metrics import mean_squared_error
@@ -10,6 +10,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import GridSearchCV
 from sklearn.ensemble import RandomForestRegressor
 from sklearn import linear_model
+from sklearn.decomposition import PCA
 
 
 def load_dataset():
@@ -19,7 +20,7 @@ def load_dataset():
 
 
 def regress_year_to_price(data, year_field, out_field):
-    mean_yearly_price = data.groupby([year_field])['SalePrice'].mean()
+    mean_yearly_price = data.loc[data['SalePrice'] > 0].groupby([year_field])['SalePrice'].mean()
     reversed_mean_yearly_price = mean_yearly_price[::-1]
     reversed_smoothed_yearly_prices = reversed_mean_yearly_price.rolling(window=10, min_periods=1, center=False).mean()
     smoothed_yearly_prices = reversed_smoothed_yearly_prices[::-1]
@@ -29,20 +30,12 @@ def regress_year_to_price(data, year_field, out_field):
         if not year in smoothed_yearly_prices.keys():
             smoothed_yearly_prices[year] = float('nan')
     smoothed_yearly_prices = smoothed_yearly_prices.sort_index().interpolate()
-    data[out_field] = data[year_field] #.apply(lambda y: log(smoothed_yearly_prices[y]) - 11.7)
+    data[out_field] = data[year_field].apply(lambda y: smoothed_yearly_prices[y])
 
 
 def regress_date_sold_price(data, out_field):
-    pricing_fields = data[['YrSold', 'MoSold', 'SalePrice']]
-    data['DateSold'] = pricing_fields['YrSold'] + pricing_fields['MoSold']
-    mean_date_price = data.groupby(['DateSold'])['SalePrice'].mean()
-    mean_year_price = data.groupby(['YrSold'])['SalePrice'].mean()
-    mean_month_price = data.groupby(['MoSold'])['SalePrice'].mean()
-    data['YrSoldPrice'] = data['YrSold'].apply(lambda y: mean_year_price[y])
-    #data['YrSoldPrice'] = data['YrSold'].apply(lambda y: log(mean_year_price[y]) - 11.7)
-    #data['MoSoldPrice'] = data['MoSold'].apply(lambda y: log(mean_month_price[y]) - 11.7)
-    # data[out_field] = data['DateSold'].apply(lambda y: log(mean_date_price[y]) - 11.7)
-    del data['DateSold']
+    mean_monthly_price = data.loc[data['SalePrice'] > 0].groupby('MoSold')['SalePrice'].mean()
+    data[out_field] = data['MoSold'].apply(lambda y: mean_monthly_price[y])
 
 
 def clean_dataset(raw):
@@ -73,12 +66,12 @@ def clean_dataset(raw):
     simple_one_hot_columns = [
         'MSSubClass',
         'Street',
-        'LotShape',
-        'LandContour',
+        #'LotShape',
+        #'LandContour',
         'Utilities',
         'LotConfig',
-        'LandSlope',
-        'Neighborhood',
+        #'LandSlope',
+        #'Neighborhood',
         'Condition1',
         'Condition2',
         'BldgType',
@@ -86,13 +79,13 @@ def clean_dataset(raw):
         'RoofStyle',
         'RoofMatl',
         'MasVnrType',
-        'ExterQual',
+        #'ExterQual',
         'ExterCond',
         'Foundation',
         'Heating',
-        'HeatingQC',
+        #'HeatingQC',
         'Electrical',
-        'KitchenQual',
+        #'KitchenQual',
         'Functional',
         'FireplaceQu',
         'Fence',
@@ -102,17 +95,17 @@ def clean_dataset(raw):
     drop_nan_one_hot_columns = [
         'MSZoning',
         'Alley',
-        'BsmtQual',
+        #'BsmtQual',
         'BsmtCond',
         'BsmtExposure',
         'BsmtFinType1',
         'BsmtFinType2',
         'GarageType',
-        'GarageFinish',
-        'GarageQual',
+        #'GarageFinish',
+        #'GarageQual',
         'GarageCond',
         'MiscFeature',
-        'SeasonSold',
+        #'SeasonSold',
         #'YrSold',
         #'MoSold',
     ]
@@ -131,7 +124,10 @@ def clean_dataset(raw):
         'BsmtHalfBath': 0.,
         '1stFlrSF': 0.,
         '2ndFlrSF': 0.,
-        'TotalBsmtSF': 0.
+        'TotalBsmtSF': 0.,
+        'BsmtQual': 'TA',
+        'GarageQual': 'TA',
+        'GarageFinish': 'RFn'
     }
     replace_missing_modal = [
         'Electrical',
@@ -152,11 +148,12 @@ def clean_dataset(raw):
         'GarageYrBlt',
         'PoolArea',
         'PoolQC',
-        #'YrSold',
+        'YrSold',
         'MoSold',
         'Exterior1st',
         'Exterior2nd',
-        'PricePerSF'
+        'PricePerSF',
+        'Neighborhood'
     ]
     use_log_scale = [
         'TotalFloorSF',
@@ -171,15 +168,30 @@ def clean_dataset(raw):
         # 'OverallCond',
         'MasVnrArea',
         'YearBuiltPrice',
-        'YearRemodAddPrice'
+        'YearRemodAddPrice',
+        'DateSoldPrice',
+        'LotFrontage',
+        'TotRmsAbvGrd'
     ]
+    qual_values = ['Po', 'Fa', 'TA', 'Gd', 'Ex']
     cleaned = raw.fillna(constant_missing_replacements)
     for column in replace_missing_modal:
-        cleaned[column].fillna(cleaned[column].mode())
-    cleaned['SeasonSold'] = cleaned['MoSold'].apply(lambda m: int(m/4))
+        modal = cleaned[column].mode()[0]
+        x = cleaned[column].fillna(modal, inplace=True)
+        print("Replacing missing values in column {} with {}".format(column, modal))
+    # cleaned['SeasonSold'] = cleaned['MoSold'].apply(lambda m: int(m/4))
+    cleaned['LotShape'] = cleaned['LotShape'].apply(lambda c: ['Reg', 'IR1', 'IR2', 'IR3'].index(c))
+    cleaned['LandContour'] = cleaned['LandContour'].apply(lambda c: ['Lvl', 'HLS', 'Bnk', 'Low'].index(c))
+    cleaned['LandSlope'] = cleaned['LandSlope'].apply(lambda c: ['Gtl', 'Mod', 'Sev'].index(c))
+    cleaned['GarageFinish'] = cleaned['GarageFinish'].apply(lambda c: ['Unf', 'RFn', 'Fin'].index(c))
+    cleaned['ExterQual'] = cleaned['ExterQual'].apply(lambda c: qual_values.index(c))
+    cleaned['BsmtQual'] = cleaned['BsmtQual'].apply(lambda c: qual_values.index(c))
+    cleaned['HeatingQC'] = cleaned['HeatingQC'].apply(lambda c: qual_values.index(c))
+    cleaned['KitchenQual'] = cleaned['KitchenQual'].apply(lambda c: qual_values.index(c))
+    cleaned['GarageQual'] = cleaned['GarageQual'].apply(lambda c: qual_values.index(c))
     cleaned['HasGarage'] = cleaned['GarageType'].apply(lambda a: float(not pd.isnull(a)))
-    cleaned['HasAboveGrnd'] = (cleaned['1stFlrSF'] + cleaned['2ndFlrSF']).apply(lambda a: float(a > 0))
-    cleaned['HasBasement'] = cleaned['BsmtQual'].apply(lambda a: float(not pd.isnull(a)))
+    cleaned['HasBasement'] = cleaned['TotalBsmtSF'].apply(lambda a: (a > 0))
+
     #cleaned['Has2ndFloor'] = cleaned['2ndFlrSF'].apply(lambda a: float(a > 0))
     cleaned['HasMultipleFloors'] = cleaned.apply(lambda row: (int(row['1stFlrSF'] > 0) + int(row['2ndFlrSF'] > 0) + int(row['TotalBsmtSF'] > 0)) > 1, axis=1)
     cleaned['TotalFloorSF'] = cleaned['1stFlrSF'] + cleaned['2ndFlrSF'] + cleaned['TotalBsmtSF']
@@ -189,8 +201,8 @@ def clean_dataset(raw):
     # cleaned['NeighborhoodPriceEstimate'] = cleaned.apply(lambda row: cost_per_sf[row['Neighborhood']]*row['TotalFloorSF'], axis=1)
     cleaned['NeighborhoodPriceEstimate'] = cleaned['Neighborhood'].apply(lambda n: cost_per_sf[n])
     cleaned['GrLivArea'] /= cleaned['TotalFloorSF']
-    cleaned = pd.get_dummies(cleaned, columns=simple_one_hot_columns)
-    cleaned = pd.get_dummies(cleaned, dummy_na=True, columns=drop_nan_one_hot_columns)
+    cleaned = pd.get_dummies(cleaned, dummy_na=False, columns=simple_one_hot_columns)
+    cleaned = pd.get_dummies(cleaned, columns=drop_nan_one_hot_columns)
     for column in yes_no_columns:
         cleaned[column] = pd.get_dummies(cleaned[column])['Y']
     exterior_vec1 = pd.get_dummies(cleaned['Exterior1st'], prefix='ext')
@@ -210,7 +222,7 @@ def clean_dataset(raw):
     cleaned['OverallCond'] = cleaned['OverallCond'] #.apply(lambda q: (q-1.)/9.)
     regress_year_to_price(cleaned, 'YearBuilt', 'YearBuiltPrice')
     regress_year_to_price(cleaned, 'YearRemodAdd', 'YearRemodAddPrice')
-    # regress_date_sold_price(cleaned, 'DateSoldPrice')
+    regress_date_sold_price(cleaned, 'DateSoldPrice')
     cleaned['MasVnrArea'] = cleaned['MasVnrArea'] #.apply(lambda a: log(a+1.))
     cleaned['FinishedBsmtProp'] = ((cleaned['BsmtFinSF1'] + cleaned['BsmtFinSF2']) / cleaned['TotalBsmtSF']).fillna(0.)
     cleaned['UnfinishedBsmtProp'] = (cleaned['BsmtUnfSF'] / cleaned['TotalBsmtSF']).fillna(0.)
@@ -221,15 +233,15 @@ def clean_dataset(raw):
     cleaned['HasPool'] = cleaned['PoolArea'].apply(lambda q: float(q > 0))
 
     epsilon = 0.5
-    for column in use_log_scale:
-        cleaned[column] = cleaned[column].apply(lambda v: log(v + epsilon))
+    # for column in use_log_scale:
+    #     cleaned[column] = cleaned[column].apply(lambda v: log(v + epsilon))
 
     for column in removed_from_cleaned:
         del cleaned[column]
 
-    # for column in cleaned.keys():
-    #     if not column == 'SalePrice':
-    #         cleaned['Log_' + str(column)] = cleaned[column].apply(lambda v: log(v + epsilon))
+    for column in cleaned.keys():
+        if not column == 'SalePrice':
+            cleaned['Log_' + str(column)] = cleaned[column].apply(lambda v: log(v + epsilon))
 
     print("Cleaned data shape: ", cleaned.shape)
     return cleaned
@@ -257,14 +269,12 @@ class MidpointNormalize(Normalize):
 from sklearn.ensemble import GradientBoostingRegressor
 
 
-def train_gbr(X, Y, selected_features=None, cleaned=None):
-    if selected_features is None:
-        selected_features = X.keys()
+def train_gbr(X, Y, cleaned=None):
     if cleaned is None:
         cleaned = X
     scaler = StandardScaler()
-    scaler.fit(cleaned[selected_features])
-    transformed = scaler.transform(X[selected_features])
+    scaler.fit(cleaned)
+    transformed = scaler.transform(X)
 
     param_grid = {
         "n_estimators": [500, 600, 700, 800, 900],
@@ -275,8 +285,8 @@ def train_gbr(X, Y, selected_features=None, cleaned=None):
          "max_depth": [2, 3]
     }
 
-    gbr = GradientBoostingRegressor(n_estimators=500, learning_rate=0.025, subsample=0.9,
-    max_depth = 3, max_features = 85, random_state = 0, loss = 'ls').fit(transformed, Y)
+    gbr = GradientBoostingRegressor(n_estimators=500, learning_rate=0.03, subsample=0.8,
+    max_depth = 3, max_features=80, random_state = 0, loss = 'ls').fit(transformed, Y)
     # params = grid_search_gbr(gbr, transformed, Y, param_grid)
     # gbr = GradientBoostingRegressor(**params)
 
@@ -286,7 +296,7 @@ def train_gbr(X, Y, selected_features=None, cleaned=None):
     print("mean CV score: ", scores.mean())
     print("std CV score: ", scores.std())
 
-    model = gbr.fit(scaler.transform(X[selected_features]), Y)
+    model = gbr.fit(scaler.transform(X), Y)
     print("Accuracy on training set: {}".format(model_accuracy(model, transformed, Y)))
 
     return model, scaler
@@ -344,7 +354,7 @@ def train_svr(X, Y, selected_features=None, cleaned=None):
     scaler = StandardScaler()
     scaler.fit(cleaned[selected_features])
     transformed = scaler.transform(X[selected_features])
-    svr = svm.SVR(kernel='linear', C=0.1) ##, max_iter=200000)
+    svr = svm.SVR(kernel='linear', C=2) ##, max_iter=200000)
     #
     # epsilon_range = [0.1]
     # C_range = [1.5,2.0,2.5]
@@ -577,6 +587,27 @@ def train_logistic(X, Y, selected_features=None, cleaned=None):
 
     return model, scaler
 
+def analyse_correlations(data):
+    my_data = data.copy()
+    my_data['LogSalePrice'] = my_data['SalePrice'].apply(lambda p: log(p))
+    del my_data['SalePrice']
+    corr = my_data.corr()['LogSalePrice'].apply(lambda x: abs(x))
+    del corr['LogSalePrice']
+    corr = corr.nlargest(1000)
+
+    print(corr)
+    selected = []
+    for key in corr.index:
+        if not key.startswith('Log_'):
+            if corr[key] > corr['Log_'+key]:
+                selected.append(key)
+        else:
+            other_key = key[4:]
+            if other_key in corr.index and corr[key] > corr[other_key]:
+                selected.append(key)
+    print(selected)
+    return selected
+
 
 def main():
     nans = lambda df: df[df.isnull().any(axis=1)]
@@ -587,42 +618,69 @@ def main():
     train = cleaned.loc['train']
     test = cleaned.loc['test']
 
-    train_pre_2008 = train.loc[train['YrSold'] < 2008]
-    train_2008 =  train.loc[train['YrSold'] == 2008]
-    train_post_2008 = train.loc[train['YrSold'] > 2008]
+    selected_features = analyse_correlations(train)
 
-    test_pre_2008 = test.loc[test['YrSold'] < 2008]
-    test_2008 = test.loc[test['YrSold'] == 2008]
-    test_post_2008 = test.loc[test['YrSold'] > 2008]
+    train_prices = train['SalePrice'].apply(lambda y: log(y)-11.5)
+    del train['SalePrice']
+    del test['SalePrice']
+    del cleaned['SalePrice']
+    print("{} training case, {} test, targets: {}".format(train.shape, test.shape, train_prices.shape))
 
-    train_prices_pre_2008 = train_pre_2008['SalePrice'].apply(lambda y: log(y)-11.5)
-    train_prices_2008 = train_2008['SalePrice'].apply(lambda y: log(y)-11.5)
-    train_prices_post_2008 = train_post_2008['SalePrice'].apply(lambda y: log(y)-11.5)
+    train = train[selected_features]
+    test = test[selected_features]
+    # cleaned_extra_keys = cleaned.keys().tolist()
+    # for key in train.keys():
+    #     cleaned_extra_keys.remove(key)
+    # for extra_key in cleaned_extra_keys:
+    #     print("Key {} does not occur in training data - ignored".format(extra_key))
 
-    del train_pre_2008['SalePrice']
-    del train_2008['SalePrice']
-    del train_post_2008['SalePrice']
+    # pca = PCA(n_components=231)
+    # pca.fit(cleaned[selected_features])
+    # pca_train = pca.transform(train)
+    # pca_test = pca.transform(test)
+    pca_train = train
+    pca_test = test
+    # selected_features = train.keys()
+    model, scaler = train_gbr(pca_train, train_prices)
 
-    del test_pre_2008['SalePrice']
-    del test_2008['SalePrice']
-    del test_post_2008['SalePrice']
+    predictions = model.predict(scaler.transform(pca_test))
 
-    print("{} pre-2008 training case, {} test, targets: {}".format(train_pre_2008.shape, test.shape, train_prices_pre_2008.shape))
-    selected_features = list(train_pre_2008.keys())
-    selected_features.remove('YrSold')
-
-    model_pre_2008, scaler_pre_2008 = train_gbr(train_pre_2008, train_prices_pre_2008, selected_features=selected_features)
-    predictions_pre_2008 = model_pre_2008.predict(scaler_pre_2008.transform(test_pre_2008[selected_features]))
-    model_2008, scaler_2008 = train_gbr(train_2008, train_prices_2008, selected_features=selected_features)
-    predictions_2008 = model_2008.predict(scaler_2008.transform(test_2008[selected_features]))
-    model_post_2008, scaler_post_2008 = train_gbr(train_post_2008, train_prices_post_2008, selected_features=selected_features)
-    predictions_post_2008 = model_post_2008.predict(scaler_post_2008.transform(test_post_2008[selected_features]))
-
-    # model, scaler = train_gbr(train, train_prices, selected_features=selected_features)
-    # predictions = model.predict(scaler.transform(test[selected_features]))
-
-    predictions = np.concatenate([predictions_pre_2008, predictions_2008, predictions_post_2008])
-    test = pd.concat([test_pre_2008, test_2008, test_post_2008])
+    # train_pre_2008 = train.loc[train['YrSold'] < 2008]
+    # train_2008 =  train.loc[train['YrSold'] == 2008]
+    # train_post_2008 = train.loc[train['YrSold'] > 2008]
+    #
+    # test_pre_2008 = test.loc[test['YrSold'] < 2008]
+    # test_2008 = test.loc[test['YrSold'] == 2008]
+    # test_post_2008 = test.loc[test['YrSold'] > 2008]
+    #
+    # train_prices_pre_2008 = train_pre_2008['SalePrice'].apply(lambda y: log(y)-11.5)
+    # train_prices_2008 = train_2008['SalePrice'].apply(lambda y: log(y)-11.5)
+    # train_prices_post_2008 = train_post_2008['SalePrice'].apply(lambda y: log(y)-11.5)
+    #
+    # del train_pre_2008['SalePrice']
+    # del train_2008['SalePrice']
+    # del train_post_2008['SalePrice']
+    #
+    # del test_pre_2008['SalePrice']
+    # del test_2008['SalePrice']
+    # del test_post_2008['SalePrice']
+    #
+    # print("{} pre-2008 training case, {} test, targets: {}".format(train_pre_2008.shape, test.shape, train_prices_pre_2008.shape))
+    # selected_features = list(train_pre_2008.keys())
+    # selected_features.remove('YrSold')
+    #
+    # model_pre_2008, scaler_pre_2008 = train_gbr(train_pre_2008, train_prices_pre_2008, selected_features=selected_features)
+    # predictions_pre_2008 = model_pre_2008.predict(scaler_pre_2008.transform(test_pre_2008[selected_features]))
+    # model_2008, scaler_2008 = train_gbr(train_2008, train_prices_2008, selected_features=selected_features)
+    # predictions_2008 = model_2008.predict(scaler_2008.transform(test_2008[selected_features]))
+    # model_post_2008, scaler_post_2008 = train_gbr(train_post_2008, train_prices_post_2008, selected_features=selected_features)
+    # predictions_post_2008 = model_post_2008.predict(scaler_post_2008.transform(test_post_2008[selected_features]))
+    #
+    # # model, scaler = train_gbr(train, train_prices, selected_features=selected_features)
+    # # predictions = model.predict(scaler.transform(test[selected_features]))
+    #
+    # predictions = np.concatenate([predictions_pre_2008, predictions_2008, predictions_post_2008])
+    # test = pd.concat([test_pre_2008, test_2008, test_post_2008])
     predictions = np.exp(predictions + 11.5)
     prediction_df = pd.DataFrame(predictions, columns=['SalePrice'])
     prediction_df.insert(0, 'Id', test.index)
