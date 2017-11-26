@@ -659,10 +659,11 @@ def main():
     pca_train['prediction'] = model.predict(scaler.transform(pca_train))
     pca_train['error'] = pca_train['prediction'] - train_log_prices
     pca_train['SalePrice'] = train_log_prices
-    sorted_by_error = pca_train['error'].sort_values(ascending=False)
-    sorted_by_error.hist()
-    plt.show()
+    # sorted_by_error = pca_train['error'].sort_values(ascending=False)
+    # sorted_by_error.hist()
+    # plt.show()
     train_no_outliers = pca_train.loc[abs(pca_train['error']) <= 0.2]
+    print("Removed {} outliers".format(pca_train.shape[0] - train_no_outliers.shape[0]))
     train_log_prices = train_no_outliers['SalePrice']
     del train_no_outliers['error']
     del train_no_outliers['prediction']
@@ -692,7 +693,12 @@ def main():
         print("Training error after residual model: ", rms)
 
     predictions = model.predict(scaler.transform(pca_test))
-    predictions = np.exp(predictions + 11.5)
+
+    model2, scaler2 = train_svr(train_no_outliers, train_log_prices)
+    predictions2 = model2.predict(scaler2.transform(pca_test))
+
+    predictions += predictions2
+    predictions = np.exp(predictions/2 + 11.5)
 
     if apply_residuals:
         predicted_residuals = residual_model.predict(residual_scaler.transform(test_linear))
