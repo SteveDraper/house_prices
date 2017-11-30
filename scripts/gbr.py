@@ -6,6 +6,20 @@ import numpy as np
 from helpers import model_accuracy, MidpointNormalize
 from sklearn.model_selection import GridSearchCV
 import matplotlib.pyplot as plt
+from model import Model
+
+
+class GbrModel(Model):
+    def __init__(self):
+        self.model = None
+        self.scaler = None
+
+    def fit(self, X, Y):
+        self.model, self.scaler = train_gbr(X, Y)
+
+    def predict(self, X):
+        return self.model.predict(self.scaler.transform(X))
+
 
 def train_gbr(X, Y, selected_features=None, cleaned=None):
     if selected_features is None:
@@ -21,8 +35,8 @@ def train_gbr(X, Y, selected_features=None, cleaned=None):
         "n_estimators": 1200,
         "learning_rate": 0.03,
         "subsample": 0.8,
-        "loss": 'ls',
-        "max_features": 60,
+        "loss": 'huber',
+        "max_features": 'sqrt',
         # "min_samples_leaf": 1,
         # "min_samples_split": 2,
         "max_depth": 2
@@ -41,8 +55,8 @@ def train_gbr(X, Y, selected_features=None, cleaned=None):
 
 
     gbr = GradientBoostingRegressor(**params).fit(transformed, Y)
-    importances = pd.Series(gbr.feature_importances_, index=selected_features).sort_values(ascending=False)
-    print("Important features: {}", list(importances.keys()[:20]))
+    # importances = pd.Series(gbr.feature_importances_, index=selected_features).sort_values(ascending=False)
+    # print("Important features: {}", list(importances.keys()[:20]))
     # important_feats = list(importances.head(200).keys())
     # scaler = StandardScaler()
     # scaler.fit(cleaned[important_feats])
@@ -52,10 +66,10 @@ def train_gbr(X, Y, selected_features=None, cleaned=None):
     # params.update(best_params)
     # gbr = GradientBoostingRegressor(**params)
 
-    scores = cross_val_score(gbr, transformed, Y, cv=KFold(n_splits=5), scoring=model_accuracy)
-    print("CV scores: ", scores)
-    print("mean CV score: ", scores.mean())
-    print("std CV score: ", scores.std())
+    # scores = cross_val_score(gbr, transformed, Y, cv=KFold(n_splits=5), scoring=model_accuracy)
+    # print("CV scores: ", scores)
+    # print("mean CV score: ", scores.mean())
+    # print("std CV score: ", scores.std())
 
     model = gbr.fit(transformed, Y)
     print("Accuracy on training set: {}".format(model_accuracy(model, transformed, Y)))

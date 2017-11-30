@@ -22,6 +22,11 @@ def regress_date_sold_price(data, out_field):
     data[out_field] = data['MoSold'].apply(lambda y: mean_monthly_price[y])
 
 
+def cat_to_mean_price(df, field):
+    lookup = df.groupby(field)['SalePrice'].mean()
+    return df[field].apply(lambda v: lookup[v])
+
+
 def clean_dataset(raw):
     # Notes:
     #   MSZoning has some rare 'NA' values which we include in the one-hot encoding
@@ -52,7 +57,7 @@ def clean_dataset(raw):
         #'Street',
         #'LotShape',
         #'LandContour',
-        'Utilities',
+        #'Utilities',
         'LotConfig',
         #'LandSlope',
         #'Neighborhood',
@@ -112,7 +117,7 @@ def clean_dataset(raw):
         'BsmtQual': 'TA',
         'GarageQual': 'TA',
         'GarageFinish': 'RFn',
-        'FireplaceQu': 'TA',
+        'FireplaceQu': 'None',
     }
     replace_missing_modal = [
         'Electrical',
@@ -138,7 +143,8 @@ def clean_dataset(raw):
         'Exterior1st',
         'Exterior2nd',
         'PricePerSF',
-        'Neighborhood'
+        'Neighborhood',
+        'Utilities'
     ]
     use_log_scale = [
         'TotalFloorSF',
@@ -164,21 +170,35 @@ def clean_dataset(raw):
         modal = cleaned[column].mode()[0]
         x = cleaned[column].fillna(modal, inplace=True)
         print("Replacing missing values in column {} with {}".format(column, modal))
+    for column in simple_one_hot_columns:
+        modal = cleaned[column].mode()[0]
+        x = cleaned[column].fillna(modal, inplace=True)
+        print("Replacing missing values in column {} with {}".format(column, modal))
+    for column in drop_nan_one_hot_columns:
+        modal = cleaned[column].mode()[0]
+        x = cleaned[column].fillna(modal, inplace=True)
+        print("Replacing missing values in column {} with {}".format(column, modal))
     # cleaned['SeasonSold'] = cleaned['MoSold'].apply(lambda m: int(m/4))
-    cleaned['LotShape'] = cleaned['LotShape'].apply(lambda c: ['Reg', 'IR1', 'IR2', 'IR3'].index(c))
+    cleaned['Functional'] = cleaned['Functional'].apply(lambda c: ['Typ', 'Min1', 'Min2', 'Mod', 'Maj1', 'Maj2', 'Sev', 'Sal'].index(c))
+    cleaned['LotShape'] = cleaned['LotShape'].apply(lambda c: ['IR1', 'Reg', 'IR2', 'IR3'].index(c))
     cleaned['LandContour'] = cleaned['LandContour'].apply(lambda c: ['Lvl', 'HLS', 'Bnk', 'Low'].index(c))
     cleaned['LandSlope'] = cleaned['LandSlope'].apply(lambda c: ['Gtl', 'Mod', 'Sev'].index(c))
     cleaned['GarageFinish'] = cleaned['GarageFinish'].apply(lambda c: ['Unf', 'RFn', 'Fin'].index(c))
+    #cleaned['ExterQual'] = cat_to_mean_price(cleaned, 'ExterQual')
     cleaned['ExterQual'] = cleaned['ExterQual'].apply(lambda c: qual_values.index(c))
     cleaned['BsmtQual'] = cleaned['BsmtQual'].apply(lambda c: qual_values.index(c))
     cleaned['HeatingQC'] = cleaned['HeatingQC'].apply(lambda c: qual_values.index(c))
     cleaned['KitchenQual'] = cleaned['KitchenQual'].apply(lambda c: qual_values.index(c))
+    cleaned['FireplaceQu'] = cat_to_mean_price(cleaned, 'FireplaceQu')
     cleaned['GarageQual'] = cleaned['GarageQual'].apply(lambda c: qual_values.index(c))
-    cleaned['FireplaceQu'] = cleaned['FireplaceQu'].apply(lambda c: qual_values.index(c))
+    #cleaned['FireplaceQu'] = cleaned['FireplaceQu'].apply(lambda c: qual_values.index(c))
+    cleaned['FireplaceQu'] = cat_to_mean_price(cleaned, 'FireplaceQu')
     cleaned['HasGarage'] = cleaned['GarageType'].apply(lambda a: float(not pd.isnull(a)))
     cleaned['HasBasement'] = cleaned['TotalBsmtSF'].apply(lambda a: (a > 0))
     cleaned['HasDecking'] = cleaned['WoodDeckSF'].apply(lambda a: (a > 0))
     cleaned['Street'] = cleaned['Street'].apply(lambda s: int(s == 'Pave'))
+    cleaned["LotFrontage"] = cleaned.groupby("Neighborhood")["LotFrontage"].transform(
+        lambda x: x.fillna(x.median()))
 
     #cleaned['Has2ndFloor'] = cleaned['2ndFlrSF'].apply(lambda a: float(a > 0))
     cleaned['HasMultipleFloors'] = cleaned.apply(lambda row: (int(row['1stFlrSF'] > 0) + int(row['2ndFlrSF'] > 0) + int(row['TotalBsmtSF'] > 0)) > 1, axis=1)
@@ -203,9 +223,9 @@ def clean_dataset(raw):
     for key in exterior_vec2:
         if not key in exterior_vec1:
             cleaned[key] = exterior_vec2[key]
-    cleaned.loc[cleaned['LotFrontage'].isnull(), 'LotFrontage'] = 0
-    cleaned.loc[cleaned['LotFrontage'] > 0, 'LotDepth'] = cleaned['LotArea']/cleaned['LotFrontage']
-    cleaned.loc[cleaned['LotFrontage'] == 0, 'LotDepth'] = cleaned['LotArea'].apply(lambda a: sqrt(a))
+    # cleaned.loc[cleaned['LotFrontage'].isnull(), 'LotFrontage'] = 0
+    # cleaned.loc[cleaned['LotFrontage'] > 0, 'LotDepth'] = cleaned['LotArea']/cleaned['LotFrontage']
+    # cleaned.loc[cleaned['LotFrontage'] == 0, 'LotDepth'] = cleaned['LotArea'].apply(lambda a: sqrt(a))
     cleaned['OverallQual'] = cleaned['OverallQual'] #.apply(lambda q: (q-1.)/9.)
     cleaned['OverallCond'] = cleaned['OverallCond'] #.apply(lambda q: (q-1.)/9.)
     regress_year_to_price(cleaned, 'YearBuilt', 'YearBuiltPrice')

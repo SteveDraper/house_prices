@@ -4,8 +4,12 @@ import numpy as np
 from math import sqrt, log, isnan, exp
 from sklearn.metrics import mean_squared_error
 from sklearn.decomposition import PCA
-from ens import train_ens
-from gbr import train_gbr
+from model import CompositeModel
+from ens import EnsModel
+from gbr import GbrModel
+from svr import SvrModel
+from sklearn.model_selection import cross_val_score, KFold
+from helpers import model_accuracy
 from svr import train_svr
 from lasso import train_lasso
 # from logistic import train_logistic
@@ -29,6 +33,7 @@ def analyse_correlations(data, target_field, log_target):
     corr = my_data.corr()['__target__'].apply(lambda x: abs(x))
     del corr['__target__']
     corr = corr.nlargest(1000)
+    print(corr.head(10))
 
     corr_lin = corr.loc[corr.index.to_series().apply(lambda s: not s.startswith('Log_') and not s.startswith('Quad_'))]
 
@@ -44,12 +49,34 @@ def analyse_correlations(data, target_field, log_target):
     return selected
 
 
+def remove_outliers(pca_train,train_log_prices,  model):
+    pca_train['prediction'] = model.predict(pca_train)
+    pca_train['error'] = pca_train['prediction'] - train_log_prices
+    pca_train['SalePrice'] = train_log_prices
+    # sorted_by_error = pca_train['error'].sort_values(ascending=False)
+    # sorted_by_error.hist()
+    # plt.show()
+    result = pca_train
+    #result = pca_train.drop(pca_train[(pca_train['Log_GrLivArea']>log(4000)) & (pca_train['SalePrice']<300000)].index)
+    #result = pca_train.loc[abs(pca_train['error']) <= 0.23]
+    del result['error']
+    del result['prediction']
+    print("Removed {} outliers".format(pca_train.shape[0] - result.shape[0]))
+    train_log_prices = result['SalePrice']
+
+    del result['SalePrice']
+    return result, train_log_prices
+
+
 def main():
     nans = lambda df: df[df.isnull().any(axis=1)]
 
     apply_residuals = False
 
     df = load_dataset()
+    df = df.drop(df[(df['GrLivArea']>4000) & (df['SalePrice']<300000)].index)
+    #df = df.drop(df[(df['OverallQual']>9.9) & (df['SalePrice']<200000)].index)
+    #df = df.drop(df[(df['GarageArea']>1200) & (df['SalePrice']<300000)].index)
     cleaned = clean_dataset(df)
     # hasNan = nans(cleaned)
     train = cleaned.loc['train']
@@ -79,26 +106,27 @@ def main():
     pca_train = train_log #.apply(lambda r: r.apply(lambda x: x*np.random.normal(1.0, 0.02)))
     pca_test = test_log
     # selected_features = train.keys()
-    model, scaler = train_gbr(pca_train, train_log_prices)
+    model1 = GbrModel()
+    model1.fit(pca_train, train_log_prices)
 
     # remove outliers
-    pca_train['prediction'] = model.predict(scaler.transform(pca_train))
-    pca_train['error'] = pca_train['prediction'] - train_log_prices
-    pca_train['SalePrice'] = train_log_prices
-    # sorted_by_error = pca_train['error'].sort_values(ascending=False)
-    # sorted_by_error.hist()
-    # plt.show()
-    train_no_outliers = pca_train.loc[abs(pca_train['error']) <= 0.2]
-    print("Removed {} outliers".format(pca_train.shape[0] - train_no_outliers.shape[0]))
-    train_log_prices = train_no_outliers['SalePrice']
-    del train_no_outliers['error']
-    del train_no_outliers['prediction']
-    del train_no_outliers['SalePrice']
-    model, scaler = train_gbr(train_no_outliers, train_log_prices)
+    train_no_outliers, train_log_prices = remove_outliers(pca_train, train_log_prices, model1)
+
+    model1 = GbrModel()
+    model2 = EnsModel()
+    model3 = SvrModel()
+    model = CompositeModel([model1, model2]) #, model3])
+
+    scores = cross_val_score(model, train_no_outliers, train_log_prices, cv=KFold(n_splits=5), scoring=model_accuracy)
+    print("CV scores: ", scores)
+    print("mean CV score: ", scores.mean())
+    print("std CV score: ", scores.std())
+
+    model.fit(train_no_outliers, train_log_prices)
 
     # construct residual errors
     if apply_residuals:
-        train_predicted = np.exp(model.predict(scaler.transform(pca_train)) + 11.5)
+        train_predicted = np.exp(model1.predict(pca_train) + 11.5)
         residuals = train_prices - train_predicted
         train['ResidualError'] = residuals
 
@@ -110,21 +138,18 @@ def main():
         train_linear = train[selected_linear_features]
         test_linear = test[selected_linear_features]
 
-        residual_model, residual_scaler = train_gbr(train_linear, residuals)
+        residual_model = GbrModel()
+        residual_model.fit(train_linear, residuals)
 
-        train_predicted_residuals = residual_model.predict(residual_scaler.transform(train_linear))
+        train_predicted_residuals = residual_model.predict(train_linear)
         train_predicted += train_predicted_residuals
 
         rms = sqrt(mean_squared_error(train_prices, train_predicted))
         print("Training error after residual model: ", rms)
 
-    predictions = model.predict(scaler.transform(pca_test))
+    predictions = model.predict(pca_test)
 
-    model2, scaler2 = train_ens(train_no_outliers, train_log_prices)
-    predictions2 = model2.predict(scaler2.transform(pca_test))
-
-    predictions += predictions2
-    predictions = np.exp(predictions/2 + 11.5)
+    predictions = np.exp(predictions + 11.5)
 
     if apply_residuals:
         predicted_residuals = residual_model.predict(residual_scaler.transform(test_linear))

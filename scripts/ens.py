@@ -3,6 +3,20 @@ from sklearn.model_selection import cross_val_score, KFold
 from sklearn.preprocessing import StandardScaler
 from sklearn import linear_model
 from helpers import model_accuracy
+from model import Model
+
+
+class EnsModel(Model):
+    def __init__(self):
+        self.model = None
+        self.scaler = None
+
+    def fit(self, X, Y):
+        self.model, self.scaler = train_ens(X, Y)
+
+    def predict(self, X):
+        return self.model.predict(self.scaler.transform(X))
+
 
 def train_ens(X, Y, selected_features=None, cleaned=None):
     if selected_features is None:
@@ -16,7 +30,7 @@ def train_ens(X, Y, selected_features=None, cleaned=None):
     params = {
         "alpha": 0.01,
         "l1_ratio": 0.3,
-       # "max_iter": 100000
+        "max_iter": 50000
     }
 
     param_grid = {
@@ -24,7 +38,7 @@ def train_ens(X, Y, selected_features=None, cleaned=None):
         "l1_ratio": [.01, .1, 0.3, .5, 0.7, .9, .99],
     }
 
-    ens = linear_model.ElasticNetCV(**param_grid, cv=KFold(n_splits=3), n_jobs=-1)
+    ens = linear_model.ElasticNetCV(**param_grid, max_iter=params['max_iter'], cv=KFold(n_splits=3), n_jobs=-1)
     ens = ens.fit(transformed, Y.values.reshape(-1))
     best_params = { "alpha": ens.alpha_, "l1_ratio": ens.l1_ratio_}
     print(best_params)
@@ -32,10 +46,10 @@ def train_ens(X, Y, selected_features=None, cleaned=None):
     params.update(best_params)
     ens = linear_model.ElasticNet(**params)
 
-    scores = cross_val_score(ens, transformed, Y, cv=KFold(n_splits=10), scoring=model_accuracy)
-    print("CV scores: ", scores)
-    print("mean CV score: ", scores.mean())
-    print("std CV score: ", scores.std())
+    # scores = cross_val_score(ens, transformed, Y, cv=KFold(n_splits=10), scoring=model_accuracy)
+    # print("CV scores: ", scores)
+    # print("mean CV score: ", scores.mean())
+    # print("std CV score: ", scores.std())
 
     model = ens.fit(transformed, Y)
     print("Accuracy on training set: {}".format(model_accuracy(model, transformed, Y)))

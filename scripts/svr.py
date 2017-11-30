@@ -1,11 +1,24 @@
 from sklearn import svm
 from sklearn.model_selection import cross_val_score, KFold
 from sklearn.preprocessing import RobustScaler
+from model import Model
 import pandas as pd
 import numpy as np
 from helpers import model_accuracy, MidpointNormalize
 from sklearn.model_selection import GridSearchCV
 import matplotlib.pyplot as plt
+
+class SvrModel(Model):
+    def __init__(self):
+        self.model = None
+        self.scaler = None
+
+    def fit(self, X, Y):
+        self.model, self.scaler = train_svr(X, Y)
+
+    def predict(self, X):
+        return self.model.predict(self.scaler.transform(X))
+
 
 def train_svr(X, Y, selected_features=None, cleaned=None):
     if selected_features is None:
@@ -60,8 +73,8 @@ def train_svr(X, Y, selected_features=None, cleaned=None):
     # params['C'] = 2.0
     # svr = svm.SVR(**params)
 
-    scores = cross_val_score(svr, transformed, Y, cv=KFold(n_splits=5), scoring=model_accuracy)
-    print("CV scores: ", scores)
+    # scores = cross_val_score(svr, transformed, Y, cv=KFold(n_splits=5), scoring=model_accuracy)
+    # print("CV scores: ", scores)
 
     model = svr.fit(scaler.transform(X[selected_features]), Y)
     print("Loss on training set: {}".format(model_accuracy(model, transformed, Y)))
