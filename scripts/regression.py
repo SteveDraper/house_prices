@@ -54,7 +54,7 @@ def analyse_correlations(data, target_field, log_target):
     return selected
 
 
-def remove_outliers(pca_train,train_log_prices,  model):
+def remove_outliers(pca_train, train_log_prices, pca_test):
     scaler = StandardScaler()
 
     pca_train['SalePrice'] = train_log_prices
@@ -68,6 +68,13 @@ def remove_outliers(pca_train,train_log_prices,  model):
     k_means = KMeans(n_clusters=10)
     k_means.fit(norm_X)
     distances = np.min(k_means.transform(norm_X),axis=1)
+    clusters = k_means.predict(norm_X)
+    pca_train['clusters'] = clusters
+    pca_train = pd.get_dummies(pca_train, columns=['clusters'], prefix='clst')
+    norm_X_test = scaler.transform(pca_test[reduced_features])
+    clusters_test = k_means.predict(norm_X_test)
+    pca_test['clusters'] = clusters_test
+    pca_test = pd.get_dummies(pca_test, columns=['clusters'], prefix='clst')
     plt.hist(distances)
     plt.show()
     pca_train['clusterDist'] = distances
@@ -91,7 +98,7 @@ def remove_outliers(pca_train,train_log_prices,  model):
     train_log_prices = result['SalePrice']
 
     del result['SalePrice']
-    return result, train_log_prices
+    return result, train_log_prices, pca_test
 
 
 def main():
@@ -149,11 +156,11 @@ def main():
     pca_train = train_log #.apply(lambda r: r.apply(lambda x: x*np.random.normal(1.0, 0.02)))
     pca_test = test_log
     # selected_features = train.keys()
-    model1 = GbrModel()
-    model1.fit(pca_train, train_log_prices)
+    # model1 = GbrModel()
+    # model1.fit(pca_train, train_log_prices)
 
     # remove outliers
-    train_no_outliers, train_log_prices = remove_outliers(pca_train, train_log_prices, model1)
+    train_no_outliers, train_log_prices, pca_test = remove_outliers(pca_train, train_log_prices, pca_test)
 
     model1 = GbrModel()
     model2 = EnsModel()
