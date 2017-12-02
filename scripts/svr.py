@@ -9,9 +9,16 @@ from sklearn.model_selection import GridSearchCV
 import matplotlib.pyplot as plt
 
 class SvrModel(Model):
-    def __init__(self):
-        self.model = None
-        self.scaler = None
+    def get_params(self, deep):
+        return {'model': self.model, 'scaler': self.scaler}
+
+    def set_param(self, **params):
+        self.model = params.get('model')
+        self.scaler = params.get('scaler')
+
+    def __init__(self, model=None, scaler=None):
+        self.model = model
+        self.scaler = scaler
 
     def fit(self, X, Y):
         self.model, self.scaler = train_svr(X, Y)
@@ -30,16 +37,17 @@ def train_svr(X, Y, selected_features=None, cleaned=None):
     transformed = scaler.transform(X[selected_features])
     svr = svm.SVR(kernel='linear', C=2) ##, max_iter=200000)
     #
-    # epsilon_range = [0.1]
-    # C_range = [1.5,2.0,2.5]
-    # param_grid = { "epsilon": epsilon_range, "C": C_range}
+    epsilon_range = [0.02,0.05,0.1]
+    C_range = [0.5,1.0,1.5]
+    kernel_range = ['rbf', 'poly', 'linear']
+    param_grid = { "epsilon": epsilon_range, "C": C_range, 'kernel': kernel_range}
     #
-    # gs = GridSearchCV(estimator=clf, param_grid=param_grid, scoring='neg_mean_squared_error', cv=KFold(n_splits=3), n_jobs=-1)
+    gs = GridSearchCV(estimator=svr, param_grid=param_grid, scoring='neg_mean_squared_error', cv=KFold(n_splits=3), n_jobs=-1)
     #
-    # gs = gs.fit(transformed, Y.reshape(-1))
+    gs = gs.fit(transformed, Y.reshape(-1))
     #
     # print(gs.cv_results_)
-    # print(gs.best_params_)
+    print(gs.best_params_)
     # print(gs.best_score_)
     #
     # scores = gs.cv_results_['mean_test_score'].reshape(len(C_range),
@@ -69,9 +77,9 @@ def train_svr(X, Y, selected_features=None, cleaned=None):
     #
     # plt.show()
     #
-    # params = gs.best_params_
+    params = gs.best_params_
     # params['C'] = 2.0
-    # svr = svm.SVR(**params)
+    svr = svm.SVR(**params)
 
     # scores = cross_val_score(svr, transformed, Y, cv=KFold(n_splits=5), scoring=model_accuracy)
     # print("CV scores: ", scores)

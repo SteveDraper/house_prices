@@ -10,9 +10,16 @@ from model import Model
 
 
 class GbrModel(Model):
-    def __init__(self):
-        self.model = None
-        self.scaler = None
+    def get_params(self, deep):
+        return {'model': self.model, 'scaler': self.scaler}
+
+    def set_param(self, **params):
+        self.model = params.get('model')
+        self.scaler = params.get('scaler')
+
+    def __init__(self, model=None, scaler=None):
+        self.model = model
+        self.scaler = scaler
 
     def fit(self, X, Y):
         self.model, self.scaler = train_gbr(X, Y)

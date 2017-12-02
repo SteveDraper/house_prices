@@ -4,12 +4,17 @@ import numpy as np
 from math import sqrt, log, isnan, exp
 from sklearn.metrics import mean_squared_error
 from sklearn.decomposition import PCA
-from model import CompositeModel
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import StandardScaler
+from composites import StagedCompositeModel, SimpleCompositeModel
+from scipy import stats
 from ens import EnsModel
 from gbr import GbrModel
 from svr import SvrModel
 from sklearn.model_selection import cross_val_score, KFold
+from sklearn.cluster import KMeans
 from helpers import model_accuracy
+from scipy.stats import johnsonsu
 from svr import train_svr
 from lasso import train_lasso
 # from logistic import train_logistic
@@ -50,17 +55,38 @@ def analyse_correlations(data, target_field, log_target):
 
 
 def remove_outliers(pca_train,train_log_prices,  model):
-    pca_train['prediction'] = model.predict(pca_train)
-    pca_train['error'] = pca_train['prediction'] - train_log_prices
+    scaler = StandardScaler()
+
     pca_train['SalePrice'] = train_log_prices
-    # sorted_by_error = pca_train['error'].sort_values(ascending=False)
-    # sorted_by_error.hist()
-    # plt.show()
-    result = pca_train
-    #result = pca_train.drop(pca_train[(pca_train['Log_GrLivArea']>log(4000)) & (pca_train['SalePrice']<300000)].index)
-    #result = pca_train.loc[abs(pca_train['error']) <= 0.23]
-    del result['error']
-    del result['prediction']
+    corr = pca_train.corr()['SalePrice'].apply(lambda x: abs(x))
+    del pca_train['SalePrice']
+    del corr['SalePrice']
+    reduced_features = corr.nlargest(50).keys()
+    scaler.fit(pca_train[reduced_features])
+    norm_X = scaler.transform(pca_train[reduced_features])
+
+    k_means = KMeans(n_clusters=10)
+    k_means.fit(norm_X)
+    distances = np.min(k_means.transform(norm_X),axis=1)
+    plt.hist(distances)
+    plt.show()
+    pca_train['clusterDist'] = distances
+    pca_train['SalePrice'] = train_log_prices
+
+    result = pca_train.loc[pca_train['clusterDist'] < 8.5]
+    del result['clusterDist']
+
+    # pca_train['prediction'] = model.predict(pca_train)
+    # pca_train['error'] = pca_train['prediction'] - train_log_prices
+    # pca_train['SalePrice'] = train_log_prices
+    # # sorted_by_error = pca_train['error'].sort_values(ascending=False)
+    # # sorted_by_error.hist()
+    # # plt.show()
+    # result = pca_train
+    # #result = pca_train.drop(pca_train[(pca_train['Log_GrLivArea']>log(4000)) & (pca_train['SalePrice']<300000)].index)
+    # #result = pca_train.loc[abs(pca_train['error']) <= 0.23]
+    # del result['error']
+    # del result['prediction']
     print("Removed {} outliers".format(pca_train.shape[0] - result.shape[0]))
     train_log_prices = result['SalePrice']
 
@@ -85,7 +111,24 @@ def main():
     selected_features = analyse_correlations(train, 'SalePrice', True)
 
     train_prices = train['SalePrice']
-    train_log_prices = train_prices.apply(lambda y: log(y)-11.5)
+    train_log_prices = train_prices.apply(lambda y: log(y))
+    lp_mean = train_log_prices.mean()
+    train_log_prices = train_log_prices.apply(lambda p: p - lp_mean)
+    # xt, l = stats.boxcox(train_prices)
+    # train_log_prices = xt
+    # lp_mean = train_log_prices.mean()
+    # train_log_prices = train_log_prices - lp_mean
+    # plt.hist(train_log_prices, 100)
+    # plt.show()
+    # param = johnsonsu.fit(train_log_prices)
+    # a = param[0]
+    # b = param[1]
+    # loc = param[2]
+    # scale = param[3]
+    # dist = johnsonsu.rvs(*param[:-2], size=10000)
+    # plt.hist(dist, bins=100, normed=True, histtype='stepfilled', alpha=0.2)
+    # plt.show()
+
     del train['SalePrice']
     del test['SalePrice']
     del cleaned['SalePrice']
@@ -115,8 +158,9 @@ def main():
     model1 = GbrModel()
     model2 = EnsModel()
     model3 = SvrModel()
-    model = CompositeModel([model1, model2]) #, model3])
+    model = SimpleCompositeModel([model1, model2]) # , model3])
 
+    model.train_first_level(train_no_outliers, train_log_prices)
     scores = cross_val_score(model, train_no_outliers, train_log_prices, cv=KFold(n_splits=5), scoring=model_accuracy)
     print("CV scores: ", scores)
     print("mean CV score: ", scores.mean())
@@ -149,7 +193,8 @@ def main():
 
     predictions = model.predict(pca_test)
 
-    predictions = np.exp(predictions + 11.5)
+    #predictions = np.power((predictions + lp_mean) * l + 1, 1/l)
+    predictions = np.exp(predictions + lp_mean)
 
     if apply_residuals:
         predicted_residuals = residual_model.predict(residual_scaler.transform(test_linear))
